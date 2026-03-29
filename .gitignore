@@ -1,0 +1,21 @@
+# macOS and editor noise
+.DS_Store
+.idea/
+.vscode/
+
+# Local environment and developer-specific version pinning
+.env
+.env.local
+.env.*.local
+.tool-versions
+.direnv/
+
+# Logs
+*.log
+
+# Rust, Trunk, and Tauri build outputs
+/target
+/.trunk
+/frontend/dist
+/src-tauri/target
+/src-tauri/gen

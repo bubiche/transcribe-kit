@@ -1,0 +1,26 @@
+[config]
+default_to_workspace = false
+
+[tasks.setup]
+description = "Install required Rust target and CLI tools for local development"
+script_runner = "bash"
+script = [
+  "rustup target add wasm32-unknown-unknown",
+  "cargo install trunk --locked",
+  "cargo install tauri-cli --version '^2.8'"
+]
+
+[tasks.dev]
+description = "Run the desktop app in development mode"
+command = "cargo"
+args = ["tauri", "dev"]
+
+[tasks.build]
+description = "Build production desktop bundles"
+command = "cargo"
+args = ["tauri", "build"]
+
+[tasks.build-frontend]
+description = "Build the Leptos frontend only"
+command = "trunk"
+args = ["build", "--release"]

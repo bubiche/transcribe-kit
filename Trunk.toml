@@ -1,0 +1,12 @@
+[build]
+target = "./frontend/index.html"
+dist = "./frontend/dist"
+
+[watch]
+ignore = ["./src-tauri"]
+
+[serve]
+port = 1420
+open = false
+ws_protocol = "ws"
+
