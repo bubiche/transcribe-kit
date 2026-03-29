@@ -24,3 +24,22 @@ args = ["tauri", "build"]
 description = "Build the Leptos frontend only"
 command = "trunk"
 args = ["build", "--release"]
+
+[tasks.test]
+description = "Run formatting, linting, and tests"
+dependencies = ["fmt-check", "clippy", "unit-test"]
+
+[tasks.fmt-check]
+description = "Check Rust formatting"
+command = "cargo"
+args = ["fmt", "--check"]
+
+[tasks.clippy]
+description = "Run Clippy lints"
+command = "cargo"
+args = ["clippy", "--all-targets", "--", "-D", "warnings"]
+
+[tasks.unit-test]
+description = "Run the Rust test suite"
+command = "cargo"
+args = ["test"]
