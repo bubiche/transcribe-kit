@@ -14,4 +14,3 @@ pub fn TranscriptionFeatureCard() -> impl IntoView {
         </section>
     }
 }
-

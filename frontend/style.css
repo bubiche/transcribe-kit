@@ -85,6 +85,12 @@ body {
   gap: 1rem;
 }
 
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.8fr);
+  gap: 1rem;
+}
+
 .hero {
   padding: 1.4rem;
   border-radius: 20px;
@@ -110,6 +116,10 @@ body {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.form-section {
+  grid-row: span 2;
+}
+
 .tag {
   display: inline-block;
   margin-bottom: 0.75rem;
@@ -126,6 +136,92 @@ body {
   margin: 0;
   padding-left: 1.2rem;
   color: var(--muted);
+}
+
+.stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.field-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.field input,
+.field select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  padding: 0.85rem 0.95rem;
+  font: inherit;
+}
+
+.field input:focus,
+.field select:focus {
+  outline: 2px solid rgba(31, 122, 77, 0.18);
+  border-color: rgba(31, 122, 77, 0.42);
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--muted);
+}
+
+.primary-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.95rem 1.2rem;
+  font: inherit;
+  font-weight: 700;
+  color: white;
+  background: linear-gradient(135deg, #1b774a, #2b915c);
+  cursor: pointer;
+  box-shadow: 0 12px 24px rgba(31, 122, 77, 0.2);
+}
+
+.primary-button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.feedback,
+.body-copy {
+  margin: 0;
+  color: var(--muted);
+}
+
+.error-section {
+  border-color: rgba(161, 75, 59, 0.2);
+  background: rgba(255, 244, 241, 0.9);
+}
+
+.mini-status {
+  margin-top: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.mini-chip {
+  padding: 0.55rem 0.8rem;
+  border-radius: 999px;
+  background: rgba(31, 122, 77, 0.08);
+  border: 1px solid rgba(31, 122, 77, 0.12);
+  color: var(--accent);
+  font-size: 0.9rem;
 }
 
 .status {
@@ -167,5 +263,8 @@ body {
   .grid {
     grid-template-columns: 1fr;
   }
-}
 
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+}

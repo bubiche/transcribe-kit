@@ -4,4 +4,3 @@ pub const ENGINE_ID: &str = "whisper";
 pub fn is_available() -> bool {
     true
 }
-
