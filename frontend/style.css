@@ -251,6 +251,140 @@ body {
   font-size: 1.1rem;
 }
 
+.model-download-section {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.model-status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 14px;
+  font-size: 0.92rem;
+}
+
+.model-status.downloaded {
+  background: rgba(31, 122, 77, 0.08);
+  border: 1px solid rgba(31, 122, 77, 0.15);
+  color: var(--accent);
+}
+
+.model-status.not-downloaded {
+  background: rgba(180, 140, 50, 0.08);
+  border: 1px solid rgba(180, 140, 50, 0.18);
+  color: #7a6520;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.ready {
+  background: var(--accent);
+}
+
+.status-dot.missing {
+  background: #b48c32;
+}
+
+.size-hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-left: auto;
+}
+
+.download-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.45rem 1rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: white;
+  background: linear-gradient(135deg, #1b774a, #2b915c);
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(31, 122, 77, 0.18);
+}
+
+.download-button:hover {
+  filter: brightness(1.08);
+}
+
+.delete-button {
+  border: 1px solid rgba(161, 75, 59, 0.25);
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #a14b3b;
+  background: rgba(161, 75, 59, 0.06);
+  cursor: pointer;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.delete-button:hover {
+  background: rgba(161, 75, 59, 0.12);
+}
+
+.download-progress {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 14px;
+  background: rgba(31, 122, 77, 0.06);
+  border: 1px solid rgba(31, 122, 77, 0.12);
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.88rem;
+  color: var(--accent);
+}
+
+.progress-stats {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.progress-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(31, 122, 77, 0.12);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1b774a, #2b915c);
+  transition: width 0.2s ease;
+}
+
+.progress-percent {
+  font-size: 0.82rem;
+  color: var(--muted);
+  text-align: right;
+}
+
+.download-error {
+  margin: 0;
+  padding: 0.6rem 0.85rem;
+  border-radius: 14px;
+  background: rgba(161, 75, 59, 0.08);
+  border: 1px solid rgba(161, 75, 59, 0.18);
+  color: #a14b3b;
+  font-size: 0.88rem;
+}
+
 @media (max-width: 860px) {
   .shell {
     padding: 1rem;

@@ -46,6 +46,23 @@ pub struct LocalModelDescriptor {
     pub id: String,
     pub label: String,
     pub engine: String,
+    pub downloaded: bool,
+    pub size_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelStatus {
+    pub model_id: String,
+    pub downloaded: bool,
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelDownloadProgress {
+    pub model_id: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub done: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,4 +71,19 @@ pub struct ApiModelDescriptor {
     pub label: String,
     pub provider: String,
     pub supports_custom_name: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptSegment {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptResult {
+    pub text: String,
+    pub segments: Vec<TranscriptSegment>,
+    pub provider: String,
+    pub model_id: String,
 }

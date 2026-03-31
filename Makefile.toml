@@ -39,6 +39,11 @@ description = "Run Clippy lints"
 command = "cargo"
 args = ["clippy", "--all-targets", "--", "-D", "warnings"]
 
+[tasks.clear-models]
+description = "Delete all downloaded Whisper model files from the cache"
+script_runner = "bash"
+script = ["rm -rf ~/Library/Caches/dev.transcribe-kit.transcribe-kit/models/"]
+
 [tasks.unit-test]
 description = "Run the Rust test suite"
 command = "cargo"

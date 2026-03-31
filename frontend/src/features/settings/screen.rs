@@ -5,7 +5,7 @@ use crate::{
     tauri_api::ProviderMode,
 };
 
-use super::state::SettingsFeatureState;
+use super::state::{DownloadState, SettingsFeatureState};
 
 #[component]
 pub fn SettingsScreen() -> impl IntoView {
@@ -178,6 +178,7 @@ fn ProviderSettingsForm(
                         local_model_id=state.form.local_model_id
                         local_models=state.local_models
                     />
+                    <ModelDownloadSection state=state />
                 </Show>
 
                 <Show when=move || matches!(state.form.provider_mode.get(), ProviderMode::Api)>
@@ -244,6 +245,133 @@ fn LocalModelField(
             </select>
         </label>
     }
+}
+
+#[component]
+fn ModelDownloadSection(state: SettingsFeatureState) -> impl IntoView {
+    let model_downloaded = state.selected_model_downloaded();
+    let download = state.download;
+    let on_download = move |_| state.download_selected_model();
+    let on_delete = move |_| state.delete_selected_model();
+
+    let selected_size_label = Signal::derive(move || {
+        let model_id = state.form.local_model_id.get();
+        state
+            .local_models
+            .get()
+            .iter()
+            .find(|m| m.id == model_id)
+            .map(|m| m.size_label.clone())
+            .unwrap_or_default()
+    });
+
+    view! {
+        <div class="model-download-section">
+            <Show
+                when=move || download.is_downloading.get()
+                fallback=move || {
+                    view! {
+                        <Show
+                            when=move || model_downloaded.get()
+                            fallback=move || {
+                                view! {
+                                    <div class="model-status not-downloaded">
+                                        <span class="status-dot missing"></span>
+                                        <span>"Model not downloaded"</span>
+                                        <span class="size-hint">{move || selected_size_label.get()}</span>
+                                        <button
+                                            class="download-button"
+                                            on:click=on_download
+                                        >
+                                            "Download"
+                                        </button>
+                                    </div>
+                                }
+                            }
+                        >
+                            <div class="model-status downloaded">
+                                <span class="status-dot ready"></span>
+                                <span>"Model ready"</span>
+                                <button
+                                    class="delete-button"
+                                    on:click=on_delete
+                                >
+                                    "Delete"
+                                </button>
+                            </div>
+                        </Show>
+                    }
+                }
+            >
+                <DownloadProgressBar download=download />
+            </Show>
+
+            <Show when=move || download.download_error.get().is_some()>
+                <p class="download-error">{move || download.download_error.get().unwrap_or_default()}</p>
+            </Show>
+        </div>
+    }
+}
+
+#[component]
+fn DownloadProgressBar(download: DownloadState) -> impl IntoView {
+    let fraction = download.progress_fraction();
+
+    let percent_label = Signal::derive(move || {
+        let pct = (fraction.get() * 100.0).round() as u32;
+        format!("{pct}%")
+    });
+
+    let downloaded_label = Signal::derive(move || {
+        let bytes = download.downloaded_bytes.get();
+        format_bytes(bytes)
+    });
+
+    let total_label = Signal::derive(move || {
+        download
+            .total_bytes
+            .get()
+            .map(format_bytes)
+            .unwrap_or_default()
+    });
+
+    view! {
+        <div class="download-progress">
+            <div class="progress-header">
+                <span>"Downloading model..."</span>
+                <span class="progress-stats">
+                    {move || downloaded_label.get()}
+                    {move || {
+                        let total = total_label.get();
+                        if total.is_empty() { String::new() } else { format!(" / {total}") }
+                    }}
+                </span>
+            </div>
+            <div class="progress-bar-track">
+                <div
+                    class="progress-bar-fill"
+                    style:width=move || percent_label.get()
+                ></div>
+            </div>
+            <span class="progress-percent">{move || percent_label.get()}</span>
+        </div>
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let kb = bytes as f64 / 1024.0;
+    if kb < 1024.0 {
+        return format!("{kb:.0} KB");
+    }
+    let mb = kb / 1024.0;
+    if mb < 1024.0 {
+        return format!("{mb:.1} MB");
+    }
+    let gb = mb / 1024.0;
+    format!("{gb:.2} GB")
 }
 
 #[component]

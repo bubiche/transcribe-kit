@@ -1,8 +1,10 @@
+mod audio;
 mod commands;
 mod models;
 mod providers;
 mod settings;
 
+use commands::LocalEngineState;
 use settings::SettingsStore;
 use tauri::Manager;
 
@@ -12,6 +14,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(settings_store)
+        .manage(LocalEngineState::new())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -20,7 +23,11 @@ pub fn run() {
             commands::get_settings,
             commands::list_local_models,
             commands::list_api_models,
-            commands::save_settings
+            commands::save_settings,
+            commands::get_model_status,
+            commands::delete_model,
+            commands::ensure_model_downloaded,
+            commands::start_file_transcription
         ])
         .setup(|app| {
             let main_window = app.get_webview_window("main").expect("main window");

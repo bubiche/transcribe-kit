@@ -106,6 +106,8 @@ Prerequisites:
 - `trunk`
 - `tauri-cli`
 - `cargo-make`
+- `cmake` (required to build whisper.cpp from source)
+- A C/C++ compiler (Xcode Command Line Tools on macOS, MSVC on Windows, `gcc`/`g++` on Linux)
 - Platform dependencies required by Tauri
 
 Commands:

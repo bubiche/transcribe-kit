@@ -2,8 +2,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::tauri_api::{
-    get_settings, list_api_models, list_local_models, save_settings, ApiModelDescriptor,
-    AppSettings, LocalModelDescriptor, ProviderMode, SaveSettingsRequest,
+    delete_model, ensure_model_downloaded, get_settings, list_api_models, list_local_models,
+    save_settings, ApiModelDescriptor, AppSettings, LocalModelDescriptor, ProviderMode,
+    SaveSettingsRequest,
 };
 
 #[derive(Clone, Copy)]
@@ -65,6 +66,45 @@ impl SettingsFormState {
 }
 
 #[derive(Clone, Copy)]
+pub struct DownloadState {
+    pub is_downloading: RwSignal<bool>,
+    pub download_model_id: RwSignal<Option<String>>,
+    pub downloaded_bytes: RwSignal<u64>,
+    pub total_bytes: RwSignal<Option<u64>>,
+    pub download_error: RwSignal<Option<String>>,
+}
+
+impl DownloadState {
+    pub fn new() -> Self {
+        Self {
+            is_downloading: RwSignal::new(false),
+            download_model_id: RwSignal::new(None),
+            downloaded_bytes: RwSignal::new(0),
+            total_bytes: RwSignal::new(None),
+            download_error: RwSignal::new(None),
+        }
+    }
+
+    pub fn progress_fraction(self) -> Signal<f64> {
+        Signal::derive(move || {
+            let total = self.total_bytes.get().unwrap_or(0);
+            if total == 0 {
+                return 0.0;
+            }
+            self.downloaded_bytes.get() as f64 / total as f64
+        })
+    }
+
+    pub fn reset(self) {
+        self.is_downloading.set(false);
+        self.download_model_id.set(None);
+        self.downloaded_bytes.set(0);
+        self.total_bytes.set(None);
+        self.download_error.set(None);
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct SettingsFeatureState {
     pub form: SettingsFormState,
     pub local_models: RwSignal<Vec<LocalModelDescriptor>>,
@@ -73,6 +113,7 @@ pub struct SettingsFeatureState {
     pub save_feedback: RwSignal<Option<String>>,
     pub is_loading: RwSignal<bool>,
     pub is_saving: RwSignal<bool>,
+    pub download: DownloadState,
 }
 
 impl SettingsFeatureState {
@@ -85,6 +126,7 @@ impl SettingsFeatureState {
             save_feedback: RwSignal::new(None),
             is_loading: RwSignal::new(true),
             is_saving: RwSignal::new(false),
+            download: DownloadState::new(),
         }
     }
 
@@ -160,6 +202,70 @@ impl SettingsFeatureState {
             }
 
             self.is_saving.set(false);
+        });
+    }
+
+    pub fn selected_model_downloaded(self) -> Signal<bool> {
+        Signal::derive(move || {
+            let model_id = self.form.local_model_id.get();
+            self.local_models
+                .get()
+                .iter()
+                .find(|m| m.id == model_id)
+                .map(|m| m.downloaded)
+                .unwrap_or(false)
+        })
+    }
+
+    pub fn download_selected_model(self) {
+        let model_id = self.form.local_model_id.get();
+
+        if self.download.is_downloading.get() {
+            return;
+        }
+
+        self.download.reset();
+        self.download.is_downloading.set(true);
+        self.download.download_model_id.set(Some(model_id.clone()));
+
+        let download = self.download;
+        spawn_local(async move {
+            let result = ensure_model_downloaded(&model_id, move |progress| {
+                download.downloaded_bytes.set(progress.downloaded_bytes);
+                download.total_bytes.set(progress.total_bytes);
+            })
+            .await;
+
+            download.is_downloading.set(false);
+            download.download_model_id.set(None);
+
+            match result {
+                Ok(()) => {
+                    if let Ok(models) = list_local_models().await {
+                        self.local_models.set(models);
+                    }
+                }
+                Err(error) => {
+                    download.download_error.set(Some(error));
+                }
+            }
+        });
+    }
+
+    pub fn delete_selected_model(self) {
+        let model_id = self.form.local_model_id.get();
+
+        spawn_local(async move {
+            match delete_model(&model_id).await {
+                Ok(()) => {
+                    if let Ok(models) = list_local_models().await {
+                        self.local_models.set(models);
+                    }
+                }
+                Err(error) => {
+                    self.download.download_error.set(Some(error));
+                }
+            }
         });
     }
 }
