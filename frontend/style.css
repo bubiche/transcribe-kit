@@ -52,6 +52,17 @@ body {
 
 .sidebar {
   padding: 1.4rem;
+  position: sticky;
+  top: 2rem;
+  align-self: start;
+}
+
+.screen {
+  display: none;
+}
+
+.screen-active {
+  display: contents;
 }
 
 .brand {
@@ -76,7 +87,24 @@ body {
   border-radius: 999px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.65);
+  font: inherit;
   font-size: 0.95rem;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  text-align: left;
+}
+
+.nav-chip:hover {
+  background: rgba(31, 122, 77, 0.06);
+  border-color: rgba(31, 122, 77, 0.2);
+}
+
+.nav-chip-active {
+  background: var(--accent-soft);
+  border-color: rgba(31, 122, 77, 0.3);
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .content {
@@ -101,12 +129,6 @@ body {
 .hero h2,
 .section h3 {
   margin-top: 0;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
 }
 
 .section {
@@ -385,6 +407,12 @@ body {
   font-size: 0.88rem;
 }
 
+.placeholder-section {
+  border-style: dashed;
+  border-color: rgba(31, 122, 77, 0.25);
+  background: rgba(215, 240, 222, 0.25);
+}
+
 @media (max-width: 860px) {
   .shell {
     padding: 1rem;
@@ -394,8 +422,8 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .grid {
-    grid-template-columns: 1fr;
+  .sidebar {
+    position: static;
   }
 
   .workspace-grid {

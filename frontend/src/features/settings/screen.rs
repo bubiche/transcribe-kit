@@ -1,9 +1,6 @@
 use leptos::prelude::*;
 
-use crate::{
-    features::{audio::AudioFeatureCard, postprocess::PostProcessFeatureCard},
-    tauri_api::ProviderMode,
-};
+use crate::tauri_api::ProviderMode;
 
 use super::state::{DownloadState, SettingsFeatureState};
 
@@ -20,65 +17,34 @@ pub fn SettingsScreen() -> impl IntoView {
     let save_configuration = move |_| state.save();
 
     view! {
-        <div class="frame">
-            <SettingsSidebar />
+        <section class="panel content">
+            <SettingsHero />
+            <StatusCards
+                provider_mode=state.form.provider_mode
+                local_model_id=state.form.local_model_id
+                api_custom_model_name=state.form.api_custom_model_name
+                custom_api_selected=custom_api_selected
+                active_api_model_label=active_api_model_label
+            />
 
-            <section class="panel content">
-                <SettingsHero />
-                <StatusCards
-                    provider_mode=state.form.provider_mode
-                    local_model_id=state.form.local_model_id
-                    api_custom_model_name=state.form.api_custom_model_name
-                    custom_api_selected=custom_api_selected
-                    active_api_model_label=active_api_model_label
-                />
+            <Show when=move || state.is_loading.get()>
+                <LoadingSection />
+            </Show>
 
-                <Show when=move || state.is_loading.get()>
-                    <LoadingSection />
-                </Show>
+            <Show when=move || state.load_error.get().is_some()>
+                <LoadErrorSection load_error=state.load_error />
+            </Show>
 
-                <Show when=move || state.load_error.get().is_some()>
-                    <LoadErrorSection load_error=state.load_error />
-                </Show>
-
-                <Show when=move || !state.is_loading.get()>
-                    <div class="workspace-grid">
-                        <ProviderSettingsForm
-                            state=state
-                            custom_api_selected=custom_api_selected
-                            on_save=save_configuration
-                        />
-                        <PhaseNotesCard />
-                        <RoadmapCard
-                            api_key_present=state.form.api_key_present
-                            custom_api_selected=custom_api_selected
-                        />
-                        <AudioFeatureCard />
-                        <PostProcessFeatureCard />
-                    </div>
-                </Show>
-            </section>
-        </div>
-    }
-}
-
-#[component]
-fn SettingsSidebar() -> impl IntoView {
-    view! {
-        <aside class="panel sidebar">
-            <p class="tag">"Phase 1"</p>
-            <h1 class="brand">"Transcribe Kit"</h1>
-            <p class="lede">
-                "Provider settings now persist locally, and API keys can live in the OS credential store."
-            </p>
-
-            <div class="nav">
-                <div class="nav-chip">"Local Whisper model selection"</div>
-                <div class="nav-chip">"OpenAI-compatible API settings"</div>
-                <div class="nav-chip">"Saved config + keychain secrets"</div>
-                <div class="nav-chip">"Ready for file and mic flows next"</div>
-            </div>
-        </aside>
+            <Show when=move || !state.is_loading.get()>
+                <div class="workspace-grid">
+                    <ProviderSettingsForm
+                        state=state
+                        custom_api_selected=custom_api_selected
+                        on_save=save_configuration
+                    />
+                </div>
+            </Show>
+        </section>
     }
 }
 
@@ -452,43 +418,5 @@ fn ApiSettingsFields(
                 <span>"Remove the saved API key for this base URL"</span>
             </label>
         </div>
-    }
-}
-
-#[component]
-fn PhaseNotesCard() -> impl IntoView {
-    view! {
-        <section class="section">
-            <p class="tag">"Notes"</p>
-            <h3>"Phase 1 coverage"</h3>
-            <ul class="list">
-                <li>"Settings are saved to a local config file."</li>
-                <li>"API keys stay in the OS keychain, not in plain text."</li>
-                <li>"Whisper choices are Tiny, Base, Small, and Large v3 Turbo."</li>
-                <li>"API choices are GPT-4o mini Transcribe, GPT-4o Transcribe, or a custom model string."</li>
-            </ul>
-        </section>
-    }
-}
-
-#[component]
-fn RoadmapCard(
-    api_key_present: RwSignal<bool>,
-    custom_api_selected: Signal<bool>,
-) -> impl IntoView {
-    view! {
-        <section class="section">
-            <p class="tag">"Roadmap"</p>
-            <h3>"What this unlocks next"</h3>
-            <p class="body-copy">
-                "The app now has a durable provider configuration layer, which gives phase 2 and phase 4 a stable place to read model and credential choices from."
-            </p>
-            <div class="mini-status">
-                <span class="mini-chip">{move || if api_key_present.get() { "API key saved" } else { "No API key saved" }}</span>
-                <span class="mini-chip">
-                    {move || if custom_api_selected.get() { "Custom API model ready" } else { "Preset API model selected" }}
-                </span>
-            </div>
-        </section>
     }
 }
