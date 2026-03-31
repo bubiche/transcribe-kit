@@ -124,10 +124,10 @@ pub fn ggml_filename(model_id: &str) -> Option<&'static str> {
 
 fn download_url(model_id: &str) -> Option<&'static str> {
     match model_id {
-        "whisper-tiny" => Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"),
-        "whisper-base" => Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"),
-        "whisper-small" => Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"),
-        "whisper-large-v3-turbo" => Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"),
+        "whisper-tiny" => Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-tiny.bin"),
+        "whisper-base" => Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-base.bin"),
+        "whisper-small" => Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-small.bin"),
+        "whisper-large-v3-turbo" => Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"),
         _ => None,
     }
 }
