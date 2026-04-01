@@ -1,5 +1,6 @@
 mod audio;
 mod commands;
+mod input_devices;
 mod models;
 mod providers;
 mod settings;
@@ -25,6 +26,7 @@ pub fn run() {
             commands::health_check,
             commands::get_settings,
             commands::list_local_models,
+            commands::list_input_devices,
             commands::list_api_models,
             commands::save_settings,
             commands::get_model_status,

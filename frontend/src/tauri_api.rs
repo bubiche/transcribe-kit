@@ -99,21 +99,47 @@ pub enum ProviderMode {
 pub struct AppSettings {
     pub provider_mode: ProviderMode,
     pub local_model_id: String,
+    pub selected_input_device_id: Option<String>,
     pub api_model_id: String,
     pub api_custom_model_name: String,
     pub api_base_url: String,
     pub api_key_present: bool,
 }
 
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            provider_mode: ProviderMode::Local,
+            local_model_id: "whisper-base".to_string(),
+            selected_input_device_id: None,
+            api_model_id: "gpt-4o-mini-transcribe".to_string(),
+            api_custom_model_name: String::new(),
+            api_base_url: "https://api.openai.com/v1".to_string(),
+            api_key_present: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SaveSettingsRequest {
     pub provider_mode: ProviderMode,
     pub local_model_id: String,
+    pub selected_input_device_id: Option<String>,
     pub api_model_id: String,
     pub api_custom_model_name: String,
     pub api_base_url: String,
     pub api_key: Option<String>,
     pub clear_api_key: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AudioInputDeviceDescriptor {
+    pub id: String,
+    pub label: String,
+    pub manufacturer: Option<String>,
+    pub channels: Option<u16>,
+    pub sample_rate_hz: Option<u32>,
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -226,6 +252,10 @@ pub async fn get_settings() -> Result<AppSettings, String> {
 
 pub async fn list_local_models() -> Result<Vec<LocalModelDescriptor>, String> {
     invoke_command("list_local_models", ()).await
+}
+
+pub async fn list_input_devices() -> Result<Vec<AudioInputDeviceDescriptor>, String> {
+    invoke_command("list_input_devices", ()).await
 }
 
 pub async fn list_api_models() -> Result<Vec<ApiModelDescriptor>, String> {

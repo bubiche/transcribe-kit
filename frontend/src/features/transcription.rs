@@ -10,14 +10,7 @@ use crate::tauri_api::{
 
 #[component]
 pub fn TranscribeScreen(active: Signal<bool>) -> impl IntoView {
-    let settings = RwSignal::new(AppSettings {
-        provider_mode: ProviderMode::Local,
-        local_model_id: "whisper-base".to_string(),
-        api_model_id: "gpt-4o-mini-transcribe".to_string(),
-        api_custom_model_name: String::new(),
-        api_base_url: String::new(),
-        api_key_present: false,
-    });
+    let settings = RwSignal::new(AppSettings::default());
     let local_models = RwSignal::new(Vec::<LocalModelDescriptor>::new());
     let selected_file = RwSignal::new(None::<String>);
     let transcript = RwSignal::new(None::<TranscriptResult>);

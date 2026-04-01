@@ -119,6 +119,18 @@ body {
   gap: 1rem;
 }
 
+.settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.9fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.settings-sidebar {
+  display: grid;
+  gap: 1rem;
+}
+
 .hero {
   padding: 1.4rem;
   border-radius: 20px;
@@ -136,10 +148,6 @@ body {
   border-radius: 18px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.72);
-}
-
-.form-section {
-  grid-row: span 2;
 }
 
 .tag {
@@ -170,6 +178,48 @@ body {
   gap: 0.45rem;
 }
 
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.input-device-panel {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: none;
+}
+
+.input-device-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.input-device-panel h4 {
+  margin: 0;
+}
+
+.settings-actions-card {
+  align-content: start;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(247, 251, 244, 0.86));
+}
+
+.field-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.field-warning {
+  color: #a14b3b;
+}
+
 .field-label {
   font-size: 0.85rem;
   font-weight: 700;
@@ -187,6 +237,14 @@ body {
   color: var(--ink);
   padding: 0.85rem 0.95rem;
   font: inherit;
+}
+
+.input-device-select {
+  min-height: 3.5rem;
+  border-width: 2px;
+  border-color: rgba(31, 122, 77, 0.28);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 10px 24px rgba(31, 122, 77, 0.08);
 }
 
 .field input:focus,
@@ -587,6 +645,10 @@ body {
   }
 
   .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-grid {
     grid-template-columns: 1fr;
   }
 

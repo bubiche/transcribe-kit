@@ -13,6 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+cpal = "0.17.3"
 directories = "5"
 hound = "3"
 keyring = { version = "3", default-features = false, features = ["apple-native", "linux-native", "windows-native"] }

@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-use crate::tauri_api::ProviderMode;
+use crate::tauri_api::{AudioInputDeviceDescriptor, ProviderMode};
 
 use super::state::{DownloadState, SettingsFeatureState};
 
@@ -21,6 +21,23 @@ pub fn SettingsScreen() -> impl IntoView {
 
     let custom_api_selected = state.custom_api_selected();
     let active_api_model_label = state.active_api_model_label();
+    let selected_input_device_label =
+        Signal::derive(move || match state.form.selected_input_device_id.get() {
+            Some(selected_id) => state
+                .input_devices
+                .get()
+                .into_iter()
+                .find(|device| device.id == selected_id)
+                .map(|device| device.label)
+                .unwrap_or_else(|| "Previously selected microphone unavailable".to_string()),
+            None => state
+                .input_devices
+                .get()
+                .into_iter()
+                .find(|device| device.is_default)
+                .map(|device| format!("System default ({})", device.label))
+                .unwrap_or_else(|| "System default microphone".to_string()),
+        });
     let save_configuration = move |_| state.save();
 
     view! {
@@ -32,6 +49,7 @@ pub fn SettingsScreen() -> impl IntoView {
                 api_custom_model_name=state.form.api_custom_model_name
                 custom_api_selected=custom_api_selected
                 active_api_model_label=active_api_model_label
+                selected_input_device_label=selected_input_device_label
             />
 
             <Show when=move || state.is_loading.get()>
@@ -43,12 +61,22 @@ pub fn SettingsScreen() -> impl IntoView {
             </Show>
 
             <Show when=move || !state.is_loading.get()>
-                <div class="workspace-grid">
-                    <ProviderSettingsForm
+                <div class="settings-grid">
+                    <ProviderSettingsCard
                         state=state
                         custom_api_selected=custom_api_selected
-                        on_save=save_configuration
                     />
+                    <div class="settings-sidebar">
+                        <InputDeviceField
+                            selected_input_device_id=state.form.selected_input_device_id
+                            input_devices=state.input_devices
+                        />
+                        <SettingsActionsCard
+                            is_saving=state.is_saving
+                            save_feedback=state.save_feedback
+                            on_save=save_configuration
+                        />
+                    </div>
                 </div>
             </Show>
         </section>
@@ -61,7 +89,7 @@ fn SettingsHero() -> impl IntoView {
         <div class="hero">
             <h2>"Provider and model configuration"</h2>
             <p>
-                "Choose between local Whisper and API transcription, save your preferred model, and keep the API key out of the plain-text config file."
+                "Choose your transcription provider, save a preferred microphone for live capture, and keep API keys out of the plain-text config file."
             </p>
         </div>
     }
@@ -74,6 +102,7 @@ fn StatusCards(
     api_custom_model_name: RwSignal<String>,
     custom_api_selected: Signal<bool>,
     active_api_model_label: Signal<String>,
+    selected_input_device_label: Signal<String>,
 ) -> impl IntoView {
     view! {
         <div class="status">
@@ -107,6 +136,10 @@ fn StatusCards(
                     }}
                 </p>
             </div>
+            <div class="status-card">
+                <p class="status-label">"Microphone"</p>
+                <p class="status-value">{move || selected_input_device_label.get()}</p>
+            </div>
         </div>
     }
 }
@@ -134,13 +167,12 @@ fn LoadErrorSection(load_error: RwSignal<Option<String>>) -> impl IntoView {
 }
 
 #[component]
-fn ProviderSettingsForm(
+fn ProviderSettingsCard(
     state: SettingsFeatureState,
     custom_api_selected: Signal<bool>,
-    on_save: impl Fn(leptos::ev::MouseEvent) + Copy + 'static,
 ) -> impl IntoView {
     view! {
-        <section class="section form-section">
+        <section class="section settings-card provider-settings-card">
             <p class="tag">"Provider"</p>
             <h3>"Transcription engine"</h3>
             <div class="stack">
@@ -157,15 +189,144 @@ fn ProviderSettingsForm(
                 <Show when=move || matches!(state.form.provider_mode.get(), ProviderMode::Api)>
                     <ApiSettingsFields state=state custom_api_selected=custom_api_selected />
                 </Show>
-
-                <button class="primary-button" on:click=on_save disabled=move || state.is_saving.get()>
-                    {move || if state.is_saving.get() { "Saving..." } else { "Save settings" }}
-                </button>
-
-                <Show when=move || state.save_feedback.get().is_some()>
-                    <p class="feedback">{move || state.save_feedback.get().unwrap_or_default()}</p>
-                </Show>
             </div>
+        </section>
+    }
+}
+
+#[component]
+fn InputDeviceField(
+    selected_input_device_id: RwSignal<Option<String>>,
+    input_devices: RwSignal<Vec<AudioInputDeviceDescriptor>>,
+) -> impl IntoView {
+    let selected_input_device_missing = Signal::derive(move || {
+        let Some(selected_id) = selected_input_device_id.get() else {
+            return false;
+        };
+
+        !input_devices
+            .get()
+            .into_iter()
+            .any(|device| device.id == selected_id)
+    });
+
+    let selected_device_hint = Signal::derive(move || {
+        let devices = input_devices.get();
+
+        match selected_input_device_id.get() {
+            Some(selected_id) => devices
+                .into_iter()
+                .find(|device| device.id == selected_id)
+                .map(|device| describe_input_device(&device))
+                .unwrap_or_else(|| {
+                    "The saved microphone is no longer available on this machine.".to_string()
+                }),
+            None => devices
+                .into_iter()
+                .find(|device| device.is_default)
+                .map(|device| format!("System default is currently {}.", device.label))
+                .unwrap_or_else(|| {
+                    "System default will follow the OS microphone choice when live recording ships in Phase 3b."
+                        .to_string()
+                }),
+        }
+    });
+
+    let device_count_label = Signal::derive(move || {
+        let count = input_devices.get().len();
+        match count {
+            0 => "No microphones detected".to_string(),
+            1 => "1 microphone detected".to_string(),
+            _ => format!("{count} microphones detected"),
+        }
+    });
+
+    view! {
+        <section class="section settings-card input-device-panel">
+            <div class="input-device-panel-header">
+                <div class="stack">
+                    <p class="tag">"Audio input"</p>
+                    <h4>"Choose the microphone for live recording"</h4>
+                    <p class="body-copy">
+                        "This dropdown controls which microphone Phase 3b will use when live capture is enabled."
+                    </p>
+                </div>
+                <span class="mini-chip">{move || device_count_label.get()}</span>
+            </div>
+
+            <label class="field">
+                <span class="field-label">"Microphone dropdown"</span>
+                <select
+                    class="input-device-select"
+                    prop:value=move || selected_input_device_id.get().unwrap_or_default()
+                    on:change=move |event| {
+                        let value = event_target_value(&event);
+                        selected_input_device_id
+                            .set(if value.trim().is_empty() { None } else { Some(value) });
+                    }
+                >
+                    <Show when=move || selected_input_device_missing.get()>
+                        <option value=move || selected_input_device_id.get().unwrap_or_default()>
+                            "Previously selected microphone (currently unavailable)"
+                        </option>
+                    </Show>
+                    <option value="">"System default microphone"</option>
+                    <For
+                        each=move || input_devices.get()
+                        key=|device| device.id.clone()
+                        children=move |device| {
+                            let label = if device.is_default {
+                                format!("{} (Default)", device.label)
+                            } else {
+                                device.label.clone()
+                            };
+
+                            view! {
+                                <option value=device.id.clone()>{label}</option>
+                            }
+                        }
+                    />
+                </select>
+            </label>
+
+            <p class="field-hint">{move || selected_device_hint.get()}</p>
+
+            <Show when=move || selected_input_device_missing.get()>
+                <p class="field-hint field-warning">
+                    "Choose a different device or switch to System default before saving."
+                </p>
+            </Show>
+
+            <Show when=move || input_devices.get().is_empty()>
+                <p class="field-hint">
+                    "No microphones were detected right now. You can still keep the selection on System default."
+                </p>
+            </Show>
+        </section>
+    }
+}
+
+#[component]
+fn SettingsActionsCard(
+    is_saving: RwSignal<bool>,
+    save_feedback: RwSignal<Option<String>>,
+    on_save: impl Fn(leptos::ev::MouseEvent) + Copy + 'static,
+) -> impl IntoView {
+    view! {
+        <section class="section settings-card settings-actions-card">
+            <p class="tag">"Apply"</p>
+            <h3>"Save configuration"</h3>
+            <p class="body-copy">
+                "Provider, model, and microphone preferences are stored together so the app opens in the same state next time."
+            </p>
+
+            <button class="primary-button" on:click=on_save disabled=move || is_saving.get()>
+                {move || if is_saving.get() { "Saving..." } else { "Save settings" }}
+            </button>
+
+            <Show when=move || save_feedback.get().is_some()>
+                <p class="feedback">{move || save_feedback.get().unwrap_or_default()}</p>
+            </Show>
         </section>
     }
 }
@@ -345,6 +506,28 @@ fn format_bytes(bytes: u64) -> String {
     }
     let gb = mb / 1024.0;
     format!("{gb:.2} GB")
+}
+
+fn describe_input_device(device: &AudioInputDeviceDescriptor) -> String {
+    let mut details = Vec::new();
+
+    if let Some(manufacturer) = device.manufacturer.as_deref() {
+        details.push(manufacturer.to_string());
+    }
+
+    if let Some(channels) = device.channels {
+        details.push(format!("{channels} ch"));
+    }
+
+    if let Some(sample_rate_hz) = device.sample_rate_hz {
+        details.push(format!("{sample_rate_hz} Hz"));
+    }
+
+    if details.is_empty() {
+        format!("{} is ready for live recording.", device.label)
+    } else {
+        format!("{}: {}", device.label, details.join(" • "))
+    }
 }
 
 #[component]

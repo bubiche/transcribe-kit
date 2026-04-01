@@ -38,6 +38,7 @@ pub struct SettingsStore {
 struct StoredSettings {
     provider_mode: ProviderMode,
     local_model_id: String,
+    selected_input_device_id: Option<String>,
     api_model_id: String,
     api_custom_model_name: String,
     api_base_url: String,
@@ -50,6 +51,7 @@ impl Default for StoredSettings {
         Self {
             provider_mode: defaults.provider_mode,
             local_model_id: defaults.local_model_id,
+            selected_input_device_id: defaults.selected_input_device_id,
             api_model_id: defaults.api_model_id,
             api_custom_model_name: defaults.api_custom_model_name,
             api_base_url: defaults.api_base_url,
@@ -79,6 +81,7 @@ impl SettingsStore {
         Ok(AppSettings {
             provider_mode: stored.provider_mode,
             local_model_id: stored.local_model_id,
+            selected_input_device_id: stored.selected_input_device_id,
             api_model_id: stored.api_model_id,
             api_custom_model_name: stored.api_custom_model_name,
             api_base_url: stored.api_base_url,
@@ -91,12 +94,16 @@ impl SettingsStore {
         request: SaveSettingsRequest,
         local_model_ids: &[&str],
         api_model_ids: &[&str],
+        input_device_ids: &[String],
     ) -> Result<AppSettings, SettingsError> {
-        validate_settings(&request, local_model_ids, api_model_ids)?;
+        validate_settings(&request, local_model_ids, api_model_ids, input_device_ids)?;
 
         let stored = StoredSettings {
             provider_mode: request.provider_mode,
             local_model_id: request.local_model_id,
+            selected_input_device_id: normalize_input_device_id(
+                request.selected_input_device_id.as_deref(),
+            ),
             api_model_id: request.api_model_id,
             api_custom_model_name: request.api_custom_model_name,
             api_base_url: normalize_base_url(&request.api_base_url),
@@ -177,6 +184,7 @@ fn validate_settings(
     request: &SaveSettingsRequest,
     local_model_ids: &[&str],
     api_model_ids: &[&str],
+    input_device_ids: &[String],
 ) -> Result<(), SettingsError> {
     if !local_model_ids.contains(&request.local_model_id.as_str()) {
         return Err(SettingsError::Validation(
@@ -217,11 +225,31 @@ fn validate_settings(
         ));
     }
 
+    if let Some(selected_input_device_id) =
+        normalize_input_device_id(request.selected_input_device_id.as_deref())
+    {
+        if !input_device_ids
+            .iter()
+            .any(|device_id| device_id == &selected_input_device_id)
+        {
+            return Err(SettingsError::Validation(
+                "Select an available microphone or switch back to System default.".to_string(),
+            ));
+        }
+    }
+
     Ok(())
 }
 
 fn normalize_base_url(base_url: &str) -> String {
     base_url.trim().trim_end_matches('/').to_string()
+}
+
+fn normalize_input_device_id(device_id: Option<&str>) -> Option<String> {
+    device_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn credential_account(base_url: &str) -> String {
@@ -248,6 +276,7 @@ mod tests {
 
         assert_eq!(settings.provider_mode, ProviderMode::Local);
         assert_eq!(settings.local_model_id, "whisper-base");
+        assert_eq!(settings.selected_input_device_id, None);
         assert_eq!(settings.api_model_id, "gpt-4o-mini-transcribe");
         assert!(!settings.api_key_present);
     }
@@ -260,6 +289,7 @@ mod tests {
             SaveSettingsRequest {
                 provider_mode: ProviderMode::Local,
                 local_model_id: "unknown".to_string(),
+                selected_input_device_id: None,
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),
                 api_custom_model_name: String::new(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
@@ -268,6 +298,7 @@ mod tests {
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
+            &[],
         );
 
         assert!(matches!(result, Err(SettingsError::Validation(_))));
@@ -281,6 +312,7 @@ mod tests {
             SaveSettingsRequest {
                 provider_mode: ProviderMode::Api,
                 local_model_id: "whisper-base".to_string(),
+                selected_input_device_id: None,
                 api_model_id: "custom".to_string(),
                 api_custom_model_name: "  ".to_string(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
@@ -289,6 +321,7 @@ mod tests {
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
+            &[],
         );
 
         assert!(matches!(result, Err(SettingsError::Validation(_))));
@@ -310,6 +343,7 @@ mod tests {
             .write_stored_settings(&StoredSettings {
                 provider_mode: ProviderMode::Local,
                 local_model_id: "whisper-base".to_string(),
+                selected_input_device_id: None,
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),
                 api_custom_model_name: String::new(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
@@ -317,5 +351,28 @@ mod tests {
             .expect("write settings");
 
         assert!(store.config_path.exists());
+    }
+
+    #[test]
+    fn rejects_unknown_selected_input_device_id() {
+        let (_temp_dir, store) = temp_store();
+
+        let result = store.save(
+            SaveSettingsRequest {
+                provider_mode: ProviderMode::Local,
+                local_model_id: "whisper-base".to_string(),
+                selected_input_device_id: Some("missing-device".to_string()),
+                api_model_id: "gpt-4o-mini-transcribe".to_string(),
+                api_custom_model_name: String::new(),
+                api_base_url: "https://api.openai.com/v1".to_string(),
+                api_key: None,
+                clear_api_key: false,
+            },
+            &["whisper-base"],
+            &["gpt-4o-mini-transcribe", "custom"],
+            &["available-device".to_string()],
+        );
+
+        assert!(matches!(result, Err(SettingsError::Validation(_))));
     }
 }

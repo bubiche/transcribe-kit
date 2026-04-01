@@ -5,11 +5,11 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::{
-    audio,
+    audio, input_devices,
     models::{
-        ApiModelDescriptor, AppSettings, InputType, LocalModelDescriptor, ModelDownloadProgress,
-        ModelStatus, SaveSettingsRequest, StartFileTranscriptionRequest, TranscriptResult,
-        TranscriptionStreamEvent,
+        ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType,
+        LocalModelDescriptor, ModelDownloadProgress, ModelStatus, SaveSettingsRequest,
+        StartFileTranscriptionRequest, TranscriptResult, TranscriptionStreamEvent,
     },
     providers::{local_whisper, local_whisper::WhisperEngine},
     settings::SettingsStore,
@@ -73,6 +73,11 @@ fn whisper_label(model_id: &str) -> String {
 }
 
 #[tauri::command]
+pub fn list_input_devices() -> Result<Vec<AudioInputDeviceDescriptor>, String> {
+    input_devices::list_input_devices().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn list_api_models() -> Vec<ApiModelDescriptor> {
     vec![
         ApiModelDescriptor {
@@ -106,8 +111,24 @@ pub fn save_settings(
     request: SaveSettingsRequest,
     store: State<'_, SettingsStore>,
 ) -> Result<AppSettings, String> {
+    let input_device_ids = if request
+        .selected_input_device_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        input_devices::list_input_devices()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|device| device.id)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
     store
-        .save(request, LOCAL_MODEL_IDS, API_MODEL_IDS)
+        .save(request, LOCAL_MODEL_IDS, API_MODEL_IDS, &input_device_ids)
         .map_err(|error| error.to_string())
 }
 

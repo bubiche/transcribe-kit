@@ -2,15 +2,16 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::tauri_api::{
-    delete_model, ensure_model_downloaded, get_settings, list_api_models, list_local_models,
-    preload_local_model, save_settings, ApiModelDescriptor, AppSettings, LocalModelDescriptor,
-    ProviderMode, SaveSettingsRequest,
+    delete_model, ensure_model_downloaded, get_settings, list_api_models, list_input_devices,
+    list_local_models, preload_local_model, save_settings, ApiModelDescriptor, AppSettings,
+    AudioInputDeviceDescriptor, LocalModelDescriptor, ProviderMode, SaveSettingsRequest,
 };
 
 #[derive(Clone, Copy)]
 pub struct SettingsFormState {
     pub provider_mode: RwSignal<ProviderMode>,
     pub local_model_id: RwSignal<String>,
+    pub selected_input_device_id: RwSignal<Option<String>>,
     pub api_model_id: RwSignal<String>,
     pub api_custom_model_name: RwSignal<String>,
     pub api_base_url: RwSignal<String>,
@@ -24,6 +25,7 @@ impl SettingsFormState {
         Self {
             provider_mode: RwSignal::new(ProviderMode::Local),
             local_model_id: RwSignal::new("whisper-base".to_string()),
+            selected_input_device_id: RwSignal::new(None),
             api_model_id: RwSignal::new("gpt-4o-mini-transcribe".to_string()),
             api_custom_model_name: RwSignal::new(String::new()),
             api_base_url: RwSignal::new("https://api.openai.com/v1".to_string()),
@@ -36,6 +38,8 @@ impl SettingsFormState {
     pub fn apply_settings(self, settings: AppSettings) {
         self.provider_mode.set(settings.provider_mode);
         self.local_model_id.set(settings.local_model_id);
+        self.selected_input_device_id
+            .set(settings.selected_input_device_id);
         self.api_model_id.set(settings.api_model_id);
         self.api_custom_model_name
             .set(settings.api_custom_model_name);
@@ -49,6 +53,7 @@ impl SettingsFormState {
         SaveSettingsRequest {
             provider_mode: self.provider_mode.get(),
             local_model_id: self.local_model_id.get(),
+            selected_input_device_id: self.selected_input_device_id.get(),
             api_model_id: self.api_model_id.get(),
             api_custom_model_name: self.api_custom_model_name.get(),
             api_base_url: self.api_base_url.get(),
@@ -108,6 +113,7 @@ impl DownloadState {
 pub struct SettingsFeatureState {
     pub form: SettingsFormState,
     pub local_models: RwSignal<Vec<LocalModelDescriptor>>,
+    pub input_devices: RwSignal<Vec<AudioInputDeviceDescriptor>>,
     pub api_models: RwSignal<Vec<ApiModelDescriptor>>,
     pub load_error: RwSignal<Option<String>>,
     pub save_feedback: RwSignal<Option<String>>,
@@ -123,6 +129,7 @@ impl SettingsFeatureState {
         Self {
             form: SettingsFormState::new(),
             local_models: RwSignal::new(Vec::new()),
+            input_devices: RwSignal::new(Vec::new()),
             api_models: RwSignal::new(Vec::new()),
             load_error: RwSignal::new(None),
             save_feedback: RwSignal::new(None),
@@ -156,30 +163,34 @@ impl SettingsFeatureState {
             self.load_error.set(None);
 
             let local_result = list_local_models().await;
+            let input_result = list_input_devices().await;
             let api_result = list_api_models().await;
             let settings_result = get_settings().await;
 
-            match (local_result, api_result, settings_result) {
-                (Ok(local), Ok(api), Ok(settings)) => {
-                    self.form.apply_settings(settings);
-                    self.local_models.set(local);
-                    self.api_models.set(api);
-                }
-                (local, api, settings) => {
-                    let mut problems = Vec::new();
+            let mut problems = Vec::new();
 
-                    if let Err(error) = local {
-                        problems.push(format!("local models: {error}"));
-                    }
-                    if let Err(error) = api {
-                        problems.push(format!("API models: {error}"));
-                    }
-                    if let Err(error) = settings {
-                        problems.push(format!("settings: {error}"));
-                    }
+            match local_result {
+                Ok(local) => self.local_models.set(local),
+                Err(error) => problems.push(format!("local models: {error}")),
+            }
 
-                    self.load_error.set(Some(problems.join(" | ")));
-                }
+            match input_result {
+                Ok(input_devices) => self.input_devices.set(input_devices),
+                Err(error) => problems.push(format!("input devices: {error}")),
+            }
+
+            match api_result {
+                Ok(api_models) => self.api_models.set(api_models),
+                Err(error) => problems.push(format!("API models: {error}")),
+            }
+
+            match settings_result {
+                Ok(settings) => self.form.apply_settings(settings),
+                Err(error) => problems.push(format!("settings: {error}")),
+            }
+
+            if !problems.is_empty() {
+                self.load_error.set(Some(problems.join(" | ")));
             }
 
             self.is_loading.set(false);
