@@ -4,10 +4,15 @@ use std::sync::Arc;
 
 use directories::ProjectDirs;
 use tauri::ipc::Channel;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, SegmentCallbackData, WhisperContext, WhisperContextParameters,
+};
 
 use super::{TranscribeLocal, TranscriptionError};
-use crate::models::{ModelDownloadProgress, ModelStatus, TranscriptResult, TranscriptSegment};
+use crate::models::{
+    InputType, ModelDownloadProgress, ModelStatus, TranscriptResult, TranscriptSegment,
+    TranscriptionSource,
+};
 
 pub const ENGINE_ID: &str = "whisper";
 
@@ -36,6 +41,25 @@ impl WhisperEngine {
 
 impl TranscribeLocal for WhisperEngine {
     fn transcribe_pcm(&self, samples: &[f32]) -> Result<TranscriptResult, TranscriptionError> {
+        self.transcribe_pcm_streaming(
+            samples,
+            None::<fn(i32)>,
+            None::<fn(i32, TranscriptSegment, String)>,
+        )
+    }
+}
+
+impl WhisperEngine {
+    pub fn transcribe_pcm_streaming<FP, FS>(
+        &self,
+        samples: &[f32],
+        on_progress: Option<FP>,
+        on_segment: Option<FS>,
+    ) -> Result<TranscriptResult, TranscriptionError>
+    where
+        FP: FnMut(i32) + 'static,
+        FS: FnMut(i32, TranscriptSegment, String) + 'static,
+    {
         let mut state = self
             .context
             .create_state()
@@ -53,7 +77,31 @@ impl TranscribeLocal for WhisperEngine {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        params.set_language(Some("en"));
+
+        if let Some(on_progress) = on_progress {
+            let callback: Box<dyn FnMut(i32)> = Box::new(on_progress);
+            params.set_progress_callback_safe::<Option<Box<dyn FnMut(i32)>>, Box<dyn FnMut(i32)>>(
+                Some(callback),
+            );
+        }
+
+        if let Some(mut on_segment) = on_segment {
+            let mut accumulated_text = String::new();
+            let callback: Box<dyn FnMut(SegmentCallbackData)> =
+                Box::new(move |segment_data: SegmentCallbackData| {
+                    let segment = callback_segment_to_model(&segment_data);
+                    accumulated_text.push_str(&segment.text);
+                    on_segment(
+                        segment_data.segment,
+                        segment,
+                        accumulated_text.trim().to_string(),
+                    );
+                });
+            params.set_segment_callback_safe_lossy::<
+                Option<Box<dyn FnMut(SegmentCallbackData)>>,
+                Box<dyn FnMut(SegmentCallbackData)>,
+            >(Some(callback));
+        }
 
         state
             .full(params, samples)
@@ -81,9 +129,23 @@ impl TranscribeLocal for WhisperEngine {
         Ok(TranscriptResult {
             text: full_text.trim().to_string(),
             segments,
-            provider: ENGINE_ID.to_string(),
-            model_id: self.model_id.clone(),
+            source: TranscriptionSource {
+                provider: ENGINE_ID.to_string(),
+                model_id: self.model_id.clone(),
+                input_type: InputType::File,
+                source_name: None,
+                duration_ms: None,
+            },
+            post_processed_text: None,
         })
+    }
+}
+
+fn callback_segment_to_model(segment_data: &whisper_rs::SegmentCallbackData) -> TranscriptSegment {
+    TranscriptSegment {
+        start_ms: segment_data.start_timestamp * 10,
+        end_ms: segment_data.end_timestamp * 10,
+        text: segment_data.text.clone(),
     }
 }
 
@@ -105,9 +167,10 @@ pub fn expected_model_path(model_id: &str) -> Result<PathBuf, TranscriptionError
         TranscriptionError::ModelLoad(format!("No GGML model file mapped for '{model_id}'"))
     })?;
 
-    let project_dirs = ProjectDirs::from("dev", "transcribe-kit", "transcribe-kit").ok_or_else(
-        || TranscriptionError::ModelLoad("Could not determine cache directory".to_string()),
-    )?;
+    let project_dirs =
+        ProjectDirs::from("dev", "transcribe-kit", "transcribe-kit").ok_or_else(|| {
+            TranscriptionError::ModelLoad("Could not determine cache directory".to_string())
+        })?;
 
     Ok(project_dirs.cache_dir().join("models").join(filename))
 }
@@ -124,10 +187,18 @@ pub fn ggml_filename(model_id: &str) -> Option<&'static str> {
 
 fn download_url(model_id: &str) -> Option<&'static str> {
     match model_id {
-        "whisper-tiny" => Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-tiny.bin"),
-        "whisper-base" => Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-base.bin"),
-        "whisper-small" => Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-small.bin"),
-        "whisper-large-v3-turbo" => Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"),
+        "whisper-tiny" => {
+            Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-tiny.bin")
+        }
+        "whisper-base" => {
+            Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-base.bin")
+        }
+        "whisper-small" => {
+            Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-small.bin")
+        }
+        "whisper-large-v3-turbo" => {
+            Some("https://huggingface.co/bubiche/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin")
+        }
         _ => None,
     }
 }
@@ -161,8 +232,9 @@ pub fn model_status(model_id: &str) -> Result<ModelStatus, TranscriptionError> {
 pub fn delete_model(model_id: &str) -> Result<(), TranscriptionError> {
     let path = expected_model_path(model_id)?;
     if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|e| TranscriptionError::ModelLoad(format!("Failed to delete model file: {e}")))?;
+        std::fs::remove_file(&path).map_err(|e| {
+            TranscriptionError::ModelLoad(format!("Failed to delete model file: {e}"))
+        })?;
     }
     Ok(())
 }
@@ -181,11 +253,12 @@ pub async fn download_model(
         TranscriptionError::Download(format!("No download URL for model '{model_id}'"))
     })?;
 
-    let models_dir = path.parent().ok_or_else(|| {
-        TranscriptionError::Download("Invalid model path".to_string())
+    let models_dir = path
+        .parent()
+        .ok_or_else(|| TranscriptionError::Download("Invalid model path".to_string()))?;
+    std::fs::create_dir_all(models_dir).map_err(|e| {
+        TranscriptionError::Download(format!("Failed to create models directory: {e}"))
     })?;
-    std::fs::create_dir_all(models_dir)
-        .map_err(|e| TranscriptionError::Download(format!("Failed to create models directory: {e}")))?;
 
     let temp_path = path.with_extension("bin.download");
 

@@ -12,6 +12,13 @@ pub fn SettingsScreen() -> impl IntoView {
         state.load();
     });
 
+    Effect::new(move |_| {
+        state.form.provider_mode.get();
+        state.form.local_model_id.get();
+        state.local_models.get();
+        state.maybe_preload_selected_local_model();
+    });
+
     let custom_api_selected = state.custom_api_selected();
     let active_api_model_label = state.active_api_model_label();
     let save_configuration = move |_| state.save();

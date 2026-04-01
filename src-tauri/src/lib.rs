@@ -11,10 +11,13 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let settings_store = SettingsStore::new().expect("settings store");
+    let preload_settings_store = settings_store.clone();
+    let engine_state = LocalEngineState::new();
+    let preload_engine_state = engine_state.clone();
 
     tauri::Builder::default()
         .manage(settings_store)
-        .manage(LocalEngineState::new())
+        .manage(engine_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -27,11 +30,16 @@ pub fn run() {
             commands::get_model_status,
             commands::delete_model,
             commands::ensure_model_downloaded,
+            commands::preload_local_model,
             commands::start_file_transcription
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let main_window = app.get_webview_window("main").expect("main window");
             main_window.set_title("Transcribe Kit")?;
+            commands::preload_saved_local_model(
+                preload_engine_state.clone(),
+                preload_settings_store.clone(),
+            );
             Ok(())
         })
         .run(tauri::generate_context!())

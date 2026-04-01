@@ -73,17 +73,70 @@ pub struct ApiModelDescriptor {
     pub supports_custom_name: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptSegment {
     pub start_ms: i64,
     pub end_ms: i64,
     pub text: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputType {
+    File,
+    Live,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranscriptionSource {
+    pub provider: String,
+    pub model_id: String,
+    pub input_type: InputType,
+    pub source_name: Option<String>,
+    pub duration_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptResult {
     pub text: String,
     pub segments: Vec<TranscriptSegment>,
-    pub provider: String,
-    pub model_id: String,
+    pub source: TranscriptionSource,
+    pub post_processed_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum TranscriptionStreamEvent {
+    Progress {
+        progress_percent: i32,
+    },
+    Segment {
+        segment_index: i32,
+        segment: TranscriptSegment,
+        accumulated_text: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StartFileTranscriptionRequest {
+    pub file_path: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TranscriptionJobState {
+    Idle,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranscriptionJobStatus {
+    pub state: TranscriptionJobState,
+    pub input_type: InputType,
+    pub source_name: Option<String>,
+    pub message: Option<String>,
 }

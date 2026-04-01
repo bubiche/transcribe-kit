@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::ipc::Channel;
 use tauri::State;
@@ -7,10 +7,11 @@ use tauri::State;
 use crate::{
     audio,
     models::{
-        ApiModelDescriptor, AppSettings, LocalModelDescriptor, ModelDownloadProgress, ModelStatus,
-        SaveSettingsRequest, TranscriptResult,
+        ApiModelDescriptor, AppSettings, InputType, LocalModelDescriptor, ModelDownloadProgress,
+        ModelStatus, SaveSettingsRequest, StartFileTranscriptionRequest, TranscriptResult,
+        TranscriptionStreamEvent,
     },
-    providers::{local_whisper, local_whisper::WhisperEngine, TranscribeLocal},
+    providers::{local_whisper, local_whisper::WhisperEngine},
     settings::SettingsStore,
 };
 
@@ -22,14 +23,15 @@ const LOCAL_MODEL_IDS: &[&str] = &[
 ];
 const API_MODEL_IDS: &[&str] = &["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "custom"];
 
+#[derive(Clone)]
 pub struct LocalEngineState {
-    pub inner: Mutex<Option<WhisperEngine>>,
+    pub inner: Arc<Mutex<Option<WhisperEngine>>>,
 }
 
 impl LocalEngineState {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(None),
+            inner: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -132,19 +134,53 @@ pub async fn ensure_model_downloaded(
 
 #[tauri::command]
 pub async fn start_file_transcription(
-    file_path: String,
+    request: StartFileTranscriptionRequest,
+    on_update: Channel<TranscriptionStreamEvent>,
     engine_state: State<'_, LocalEngineState>,
     settings_store: State<'_, SettingsStore>,
 ) -> Result<TranscriptResult, String> {
     let settings = settings_store.load().map_err(|e| e.to_string())?;
-    let model_id = settings.local_model_id;
 
-    let engine = get_or_load_engine(&engine_state, &model_id)?;
+    if settings.provider_mode != crate::models::ProviderMode::Local {
+        return Err(
+            "File import transcription is only wired up for Local Whisper right now. Switch the provider in Settings to continue.".to_string(),
+        );
+    }
+
+    let model_id = settings.local_model_id;
+    let file_path = PathBuf::from(&request.file_path);
+    let source_name = file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_string());
+    let on_update = Arc::new(on_update);
+    let engine_cache = Arc::clone(&engine_state.inner);
 
     let result = tokio::task::spawn_blocking(move || -> Result<TranscriptResult, String> {
-        let samples = audio::decode_wav_file(&PathBuf::from(&file_path))
+        let engine = get_or_load_engine(&engine_cache, &model_id)?;
+        let decoded_audio = audio::decode_audio_file(&file_path).map_err(|e| e.to_string())?;
+        let progress_updates = Arc::clone(&on_update);
+        let segment_updates = Arc::clone(&on_update);
+        let mut result = engine
+            .transcribe_pcm_streaming(
+                &decoded_audio.samples,
+                Some(move |progress_percent| {
+                    let _ = progress_updates
+                        .send(TranscriptionStreamEvent::Progress { progress_percent });
+                }),
+                Some(move |segment_index, segment, accumulated_text| {
+                    let _ = segment_updates.send(TranscriptionStreamEvent::Segment {
+                        segment_index,
+                        segment,
+                        accumulated_text,
+                    });
+                }),
+            )
             .map_err(|e| e.to_string())?;
-        engine.transcribe_pcm(&samples).map_err(|e| e.to_string())
+        result.source.input_type = InputType::File;
+        result.source.source_name = source_name;
+        result.source.duration_ms = decoded_audio.duration_ms;
+        Ok(result)
     })
     .await
     .map_err(|e| format!("Transcription task failed: {e}"))??;
@@ -152,16 +188,40 @@ pub async fn start_file_transcription(
     Ok(result)
 }
 
+#[tauri::command]
+pub async fn preload_local_model(
+    model_id: String,
+    engine_state: State<'_, LocalEngineState>,
+) -> Result<(), String> {
+    let engine_cache = Arc::clone(&engine_state.inner);
+
+    tokio::task::spawn_blocking(move || get_or_load_engine(&engine_cache, &model_id).map(|_| ()))
+        .await
+        .map_err(|e| format!("Model preload task failed: {e}"))?
+}
+
+pub fn preload_saved_local_model(engine_state: LocalEngineState, settings_store: SettingsStore) {
+    std::thread::spawn(move || {
+        let Ok(settings) = settings_store.load() else {
+            return;
+        };
+
+        if settings.provider_mode != crate::models::ProviderMode::Local {
+            return;
+        }
+
+        let _ = get_or_load_engine(&engine_state.inner, &settings.local_model_id);
+    });
+}
+
 fn get_or_load_engine(
-    state: &LocalEngineState,
+    engine_cache: &Arc<Mutex<Option<WhisperEngine>>>,
     model_id: &str,
 ) -> Result<WhisperEngine, String> {
-    {
-        let guard = state.inner.lock().unwrap();
-        if let Some(ref engine) = *guard {
-            if engine.model_id() == model_id {
-                return Ok(engine.clone());
-            }
+    let mut guard = engine_cache.lock().unwrap();
+    if let Some(ref engine) = *guard {
+        if engine.model_id() == model_id {
+            return Ok(engine.clone());
         }
     }
 
@@ -170,10 +230,8 @@ fn get_or_load_engine(
         .to_str()
         .ok_or("Model path contains invalid UTF-8")?;
 
-    let engine = WhisperEngine::load(path_str, model_id.to_string())
-        .map_err(|e| e.to_string())?;
+    let engine = WhisperEngine::load(path_str, model_id.to_string()).map_err(|e| e.to_string())?;
 
-    let mut guard = state.inner.lock().unwrap();
     *guard = Some(engine.clone());
 
     Ok(engine)

@@ -3,8 +3,8 @@ use leptos::task::spawn_local;
 
 use crate::tauri_api::{
     delete_model, ensure_model_downloaded, get_settings, list_api_models, list_local_models,
-    save_settings, ApiModelDescriptor, AppSettings, LocalModelDescriptor, ProviderMode,
-    SaveSettingsRequest,
+    preload_local_model, save_settings, ApiModelDescriptor, AppSettings, LocalModelDescriptor,
+    ProviderMode, SaveSettingsRequest,
 };
 
 #[derive(Clone, Copy)]
@@ -114,6 +114,8 @@ pub struct SettingsFeatureState {
     pub is_loading: RwSignal<bool>,
     pub is_saving: RwSignal<bool>,
     pub download: DownloadState,
+    pub warming_model_id: RwSignal<Option<String>>,
+    pub warmed_model_id: RwSignal<Option<String>>,
 }
 
 impl SettingsFeatureState {
@@ -127,6 +129,8 @@ impl SettingsFeatureState {
             is_loading: RwSignal::new(true),
             is_saving: RwSignal::new(false),
             download: DownloadState::new(),
+            warming_model_id: RwSignal::new(None),
+            warmed_model_id: RwSignal::new(None),
         }
     }
 
@@ -157,9 +161,9 @@ impl SettingsFeatureState {
 
             match (local_result, api_result, settings_result) {
                 (Ok(local), Ok(api), Ok(settings)) => {
+                    self.form.apply_settings(settings);
                     self.local_models.set(local);
                     self.api_models.set(api);
-                    self.form.apply_settings(settings);
                 }
                 (local, api, settings) => {
                     let mut problems = Vec::new();
@@ -265,6 +269,40 @@ impl SettingsFeatureState {
                 Err(error) => {
                     self.download.download_error.set(Some(error));
                 }
+            }
+        });
+    }
+
+    pub fn maybe_preload_selected_local_model(self) {
+        if self.form.provider_mode.get_untracked() != ProviderMode::Local {
+            return;
+        }
+
+        let model_id = self.form.local_model_id.get_untracked();
+        let model_downloaded = self
+            .local_models
+            .get_untracked()
+            .iter()
+            .any(|model| model.id == model_id && model.downloaded);
+
+        if !model_downloaded {
+            return;
+        }
+
+        if self.warmed_model_id.get_untracked().as_deref() == Some(model_id.as_str())
+            || self.warming_model_id.get_untracked().as_deref() == Some(model_id.as_str())
+        {
+            return;
+        }
+
+        self.warming_model_id.set(Some(model_id.clone()));
+
+        spawn_local(async move {
+            let result = preload_local_model(&model_id).await;
+            self.warming_model_id.set(None);
+
+            if result.is_ok() {
+                self.warmed_model_id.set(Some(model_id));
             }
         });
     }

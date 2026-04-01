@@ -7,6 +7,24 @@ export async function invoke(command, args) {
   return await window.__TAURI__.core.invoke(command, args ?? {});
 }
 
+export async function pickAudioFile() {
+  const result = await window.__TAURI__.dialog.open({
+    multiple: false,
+    filters: [
+      {
+        name: 'Audio',
+        extensions: ['wav', 'mp3', 'flac', 'ogg', 'm4a']
+      }
+    ]
+  });
+
+  if (Array.isArray(result)) {
+    return result[0] ?? null;
+  }
+
+  return result ?? null;
+}
+
 export async function downloadModel(modelId, onProgress) {
   const channel = new window.__TAURI__.core.Channel();
   channel.onmessage = onProgress;
@@ -15,16 +33,59 @@ export async function downloadModel(modelId, onProgress) {
     onProgress: channel,
   });
 }
+
+export async function transcribeFile(filePath, onUpdate) {
+  const channel = new window.__TAURI__.core.Channel();
+  channel.onmessage = onUpdate;
+  return await window.__TAURI__.core.invoke('start_file_transcription', {
+    request: {
+      file_path: filePath,
+    },
+    onUpdate: channel,
+  });
+}
+
+export async function writeClipboardText(text) {
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  if (!copied) {
+    throw new Error('Clipboard copy failed');
+  }
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(catch, js_name = invoke)]
     async fn tauri_invoke(command: &str, args: JsValue) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = pickAudioFile)]
+    async fn pick_audio_file_js() -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(catch, js_name = downloadModel)]
     async fn download_model_js(
         model_id: &str,
         on_progress: &Closure<dyn Fn(JsValue)>,
     ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = transcribeFile)]
+    async fn transcribe_file_js(
+        file_path: &str,
+        on_update: &Closure<dyn Fn(JsValue)>,
+    ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = writeClipboardText)]
+    async fn write_clipboard_text_js(text: &str) -> Result<JsValue, JsValue>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,11 +156,57 @@ pub struct TranscriptSegment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputType {
+    File,
+    Live,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranscriptionSource {
+    pub provider: String,
+    pub model_id: String,
+    pub input_type: InputType,
+    pub source_name: Option<String>,
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptResult {
     pub text: String,
     pub segments: Vec<TranscriptSegment>,
-    pub provider: String,
-    pub model_id: String,
+    pub source: TranscriptionSource,
+    pub post_processed_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum TranscriptionStreamEvent {
+    Progress {
+        progress_percent: i32,
+    },
+    Segment {
+        segment_index: i32,
+        segment: TranscriptSegment,
+        accumulated_text: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TranscriptionJobState {
+    Idle,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranscriptionJobStatus {
+    pub state: TranscriptionJobState,
+    pub input_type: InputType,
+    pub source_name: Option<String>,
+    pub message: Option<String>,
 }
 
 pub async fn invoke_command<T>(command: &str, args: impl Serialize) -> Result<T, String>
@@ -172,6 +279,16 @@ pub async fn ensure_model_downloaded(
     result.map(|_| ())
 }
 
+pub async fn preload_local_model(model_id: &str) -> Result<(), String> {
+    invoke_command(
+        "preload_local_model",
+        ModelIdArg {
+            model_id: model_id.to_string(),
+        },
+    )
+    .await
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ModelIdArg {
@@ -195,9 +312,7 @@ fn parse_channel_message(value: &JsValue) -> Option<ModelDownloadProgress> {
         .and_then(|v| v.as_f64())
         .map(|v| v as u64);
 
-    let done = get("done")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let done = get("done").and_then(|v| v.as_bool()).unwrap_or(false);
 
     Some(ModelDownloadProgress {
         model_id,
@@ -207,20 +322,84 @@ fn parse_channel_message(value: &JsValue) -> Option<ModelDownloadProgress> {
     })
 }
 
-pub async fn start_file_transcription(file_path: &str) -> Result<TranscriptResult, String> {
-    invoke_command(
-        "start_file_transcription",
-        StartFileTranscriptionArgs {
-            file_path: file_path.to_string(),
-        },
-    )
-    .await
+pub async fn start_file_transcription(
+    file_path: &str,
+    on_update: impl Fn(TranscriptionStreamEvent) + 'static,
+) -> Result<TranscriptResult, String> {
+    let closure = Closure::wrap(Box::new(move |value: JsValue| {
+        if let Some(event) = parse_transcription_stream_event(&value) {
+            on_update(event);
+        }
+    }) as Box<dyn Fn(JsValue)>);
+
+    let result = transcribe_file_js(file_path, &closure)
+        .await
+        .map_err(js_error_message);
+
+    closure.forget();
+    result
+        .and_then(|value| serde_wasm_bindgen::from_value(value).map_err(|error| error.to_string()))
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StartFileTranscriptionArgs {
-    file_path: String,
+pub async fn write_clipboard_text(text: &str) -> Result<(), String> {
+    write_clipboard_text_js(text)
+        .await
+        .map_err(js_error_message)
+        .map(|_| ())
+}
+
+pub async fn pick_audio_file() -> Result<Option<String>, String> {
+    let value = pick_audio_file_js().await.map_err(js_error_message)?;
+
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+
+    value
+        .as_string()
+        .map(Some)
+        .ok_or_else(|| "File picker returned an unexpected value".to_string())
+}
+
+fn parse_transcription_stream_event(value: &JsValue) -> Option<TranscriptionStreamEvent> {
+    let get =
+        |target: &JsValue, key: &str| js_sys::Reflect::get(target, &JsValue::from_str(key)).ok();
+    let get_string = |target: &JsValue, snake: &str, camel: &str| {
+        get(target, snake)
+            .or_else(|| get(target, camel))
+            .and_then(|v| v.as_string())
+    };
+    let get_i64 = |target: &JsValue, snake: &str, camel: &str| {
+        get(target, snake)
+            .or_else(|| get(target, camel))
+            .and_then(|v| v.as_f64())
+            .map(|v| v as i64)
+    };
+    let get_i32 = |target: &JsValue, snake: &str, camel: &str| {
+        get(target, snake)
+            .or_else(|| get(target, camel))
+            .and_then(|v| v.as_f64())
+            .map(|v| v as i32)
+    };
+
+    match get_string(value, "kind", "kind")?.as_str() {
+        "progress" => Some(TranscriptionStreamEvent::Progress {
+            progress_percent: get_i32(value, "progress_percent", "progressPercent")?,
+        }),
+        "segment" => {
+            let segment_value = get(value, "segment")?;
+            Some(TranscriptionStreamEvent::Segment {
+                segment_index: get_i32(value, "segment_index", "segmentIndex")?,
+                segment: TranscriptSegment {
+                    start_ms: get_i64(&segment_value, "start_ms", "startMs")?,
+                    end_ms: get_i64(&segment_value, "end_ms", "endMs")?,
+                    text: get_string(&segment_value, "text", "text")?,
+                },
+                accumulated_text: get_string(value, "accumulated_text", "accumulatedText")?,
+            })
+        }
+        _ => None,
+    }
 }
 
 fn js_error_message(error: impl Into<JsValue>) -> String {

@@ -17,7 +17,7 @@ pub fn App() -> impl IntoView {
                 <AppSidebar active=active_screen />
 
                 <div class="screen" class:screen-active=move || active_screen.get() == Screen::Transcribe>
-                    <TranscribeScreen />
+                    <TranscribeScreen active=Signal::derive(move || active_screen.get() == Screen::Transcribe) />
                 </div>
                 <div class="screen" class:screen-active=move || active_screen.get() == Screen::PostProcess>
                     <PostProcessScreen />
