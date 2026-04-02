@@ -5,7 +5,8 @@ use keyring::Entry;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    models::{AppSettings, ProviderMode, SaveSettingsRequest},
+    hotkeys,
+    models::{AppSettings, HotkeyMode, ProviderMode, SaveSettingsRequest},
     providers::api_openai_compatible::ApiCredentials,
 };
 
@@ -39,9 +40,30 @@ struct StoredSettings {
     provider_mode: ProviderMode,
     local_model_id: String,
     selected_input_device_id: Option<String>,
+    #[serde(default = "default_hotkey_mode")]
+    pub(crate) hotkey_mode: HotkeyMode,
+    #[serde(default = "default_hotkey_shortcut")]
+    pub(crate) hotkey_shortcut: String,
     api_model_id: String,
     api_custom_model_name: String,
     api_base_url: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedSettingsSave {
+    stored: StoredSettings,
+    api_key: Option<String>,
+    clear_api_key: bool,
+}
+
+impl PreparedSettingsSave {
+    pub(crate) fn hotkey_shortcut(&self) -> &str {
+        &self.stored.hotkey_shortcut
+    }
+
+    pub(crate) fn hotkey_mode(&self) -> HotkeyMode {
+        self.stored.hotkey_mode
+    }
 }
 
 impl Default for StoredSettings {
@@ -52,6 +74,8 @@ impl Default for StoredSettings {
             provider_mode: defaults.provider_mode,
             local_model_id: defaults.local_model_id,
             selected_input_device_id: defaults.selected_input_device_id,
+            hotkey_mode: defaults.hotkey_mode,
+            hotkey_shortcut: defaults.hotkey_shortcut,
             api_model_id: defaults.api_model_id,
             api_custom_model_name: defaults.api_custom_model_name,
             api_base_url: defaults.api_base_url,
@@ -82,20 +106,23 @@ impl SettingsStore {
             provider_mode: stored.provider_mode,
             local_model_id: stored.local_model_id,
             selected_input_device_id: stored.selected_input_device_id,
+            hotkey_mode: stored.hotkey_mode,
+            hotkey_shortcut: stored.hotkey_shortcut,
             api_model_id: stored.api_model_id,
             api_custom_model_name: stored.api_custom_model_name,
             api_base_url: stored.api_base_url,
             api_key_present,
+            hotkey_registration_error: None,
         })
     }
 
-    pub fn save(
+    pub(crate) fn prepare_save(
         &self,
         request: SaveSettingsRequest,
         local_model_ids: &[&str],
         api_model_ids: &[&str],
         input_device_ids: &[String],
-    ) -> Result<AppSettings, SettingsError> {
+    ) -> Result<PreparedSettingsSave, SettingsError> {
         validate_settings(&request, local_model_ids, api_model_ids, input_device_ids)?;
 
         let stored = StoredSettings {
@@ -104,35 +131,65 @@ impl SettingsStore {
             selected_input_device_id: normalize_input_device_id(
                 request.selected_input_device_id.as_deref(),
             ),
+            hotkey_mode: request.hotkey_mode,
+            hotkey_shortcut: hotkeys::validate_shortcut(&request.hotkey_shortcut)
+                .map_err(SettingsError::Validation)?,
             api_model_id: request.api_model_id,
             api_custom_model_name: request.api_custom_model_name,
             api_base_url: normalize_base_url(&request.api_base_url),
         };
 
-        if request.clear_api_key {
-            self.delete_api_key(&stored.api_base_url)?;
-        }
-
-        if let Some(api_key) = request
+        let api_key = request
             .api_key
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-        {
-            self.set_api_key(&stored.api_base_url, api_key)?;
-        }
+            .map(|value| value.to_string());
 
         if matches!(stored.provider_mode, ProviderMode::Api)
-            && !self.has_api_key(&stored.api_base_url)?
+            && api_key.is_none()
+            && (request.clear_api_key || !self.has_api_key(&stored.api_base_url)?)
         {
             return Err(SettingsError::Validation(
                 "An API key is required when API transcription is selected.".to_string(),
             ));
         }
 
-        self.write_stored_settings(&stored)?;
+        Ok(PreparedSettingsSave {
+            stored,
+            api_key,
+            clear_api_key: request.clear_api_key,
+        })
+    }
+
+    pub(crate) fn commit_save(
+        &self,
+        prepared: PreparedSettingsSave,
+    ) -> Result<AppSettings, SettingsError> {
+        if prepared.clear_api_key {
+            self.delete_api_key(&prepared.stored.api_base_url)?;
+        }
+
+        if let Some(api_key) = prepared.api_key.as_deref() {
+            self.set_api_key(&prepared.stored.api_base_url, api_key)?;
+        }
+
+        self.write_stored_settings(&prepared.stored)?;
 
         self.load()
+    }
+
+    #[allow(dead_code)]
+    pub fn save(
+        &self,
+        request: SaveSettingsRequest,
+        local_model_ids: &[&str],
+        api_model_ids: &[&str],
+        input_device_ids: &[String],
+    ) -> Result<AppSettings, SettingsError> {
+        let prepared =
+            self.prepare_save(request, local_model_ids, api_model_ids, input_device_ids)?;
+        self.commit_save(prepared)
     }
 
     fn read_stored_settings(&self) -> Result<StoredSettings, SettingsError> {
@@ -241,6 +298,14 @@ fn validate_settings(
     Ok(())
 }
 
+fn default_hotkey_mode() -> HotkeyMode {
+    AppSettings::default().hotkey_mode
+}
+
+fn default_hotkey_shortcut() -> String {
+    AppSettings::default().hotkey_shortcut
+}
+
 fn normalize_base_url(base_url: &str) -> String {
     base_url.trim().trim_end_matches('/').to_string()
 }
@@ -277,8 +342,11 @@ mod tests {
         assert_eq!(settings.provider_mode, ProviderMode::Local);
         assert_eq!(settings.local_model_id, "whisper-base");
         assert_eq!(settings.selected_input_device_id, None);
+        assert_eq!(settings.hotkey_mode, HotkeyMode::PushToTalk);
+        assert_eq!(settings.hotkey_shortcut, "CmdOrCtrl+Shift+T");
         assert_eq!(settings.api_model_id, "gpt-4o-mini-transcribe");
         assert!(!settings.api_key_present);
+        assert_eq!(settings.hotkey_registration_error, None);
     }
 
     #[test]
@@ -290,6 +358,8 @@ mod tests {
                 provider_mode: ProviderMode::Local,
                 local_model_id: "unknown".to_string(),
                 selected_input_device_id: None,
+                hotkey_mode: HotkeyMode::PushToTalk,
+                hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),
                 api_custom_model_name: String::new(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
@@ -313,6 +383,8 @@ mod tests {
                 provider_mode: ProviderMode::Api,
                 local_model_id: "whisper-base".to_string(),
                 selected_input_device_id: None,
+                hotkey_mode: HotkeyMode::PushToTalk,
+                hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
                 api_model_id: "custom".to_string(),
                 api_custom_model_name: "  ".to_string(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
@@ -344,6 +416,8 @@ mod tests {
                 provider_mode: ProviderMode::Local,
                 local_model_id: "whisper-base".to_string(),
                 selected_input_device_id: None,
+                hotkey_mode: HotkeyMode::PushToTalk,
+                hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),
                 api_custom_model_name: String::new(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
@@ -362,6 +436,8 @@ mod tests {
                 provider_mode: ProviderMode::Local,
                 local_model_id: "whisper-base".to_string(),
                 selected_input_device_id: Some("missing-device".to_string()),
+                hotkey_mode: HotkeyMode::PushToTalk,
+                hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),
                 api_custom_model_name: String::new(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
@@ -371,6 +447,31 @@ mod tests {
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
             &["available-device".to_string()],
+        );
+
+        assert!(matches!(result, Err(SettingsError::Validation(_))));
+    }
+
+    #[test]
+    fn rejects_invalid_hotkeys() {
+        let (_temp_dir, store) = temp_store();
+
+        let result = store.save(
+            SaveSettingsRequest {
+                provider_mode: ProviderMode::Local,
+                local_model_id: "whisper-base".to_string(),
+                selected_input_device_id: None,
+                hotkey_mode: HotkeyMode::PushToTalk,
+                hotkey_shortcut: "T".to_string(),
+                api_model_id: "gpt-4o-mini-transcribe".to_string(),
+                api_custom_model_name: String::new(),
+                api_base_url: "https://api.openai.com/v1".to_string(),
+                api_key: None,
+                clear_api_key: false,
+            },
+            &["whisper-base"],
+            &["gpt-4o-mini-transcribe", "custom"],
+            &[],
         );
 
         assert!(matches!(result, Err(SettingsError::Validation(_))));

@@ -5,7 +5,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::{
-    audio, input_devices,
+    audio, hotkeys, input_devices,
     models::{
         ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType,
         LocalModelDescriptor, ModelDownloadProgress, ModelStatus, SaveSettingsRequest,
@@ -102,15 +102,23 @@ pub fn list_api_models() -> Vec<ApiModelDescriptor> {
 }
 
 #[tauri::command]
-pub fn get_settings(store: State<'_, SettingsStore>) -> Result<AppSettings, String> {
-    store.load().map_err(|error| error.to_string())
+pub fn get_settings(
+    store: State<'_, SettingsStore>,
+    hotkey_state: State<'_, hotkeys::HotkeyManagerState>,
+) -> Result<AppSettings, String> {
+    let mut settings = store.load().map_err(|error| error.to_string())?;
+    settings.hotkey_registration_error = hotkey_state.registration_error();
+    Ok(settings)
 }
 
 #[tauri::command]
 pub fn save_settings(
     request: SaveSettingsRequest,
+    app: tauri::AppHandle,
     store: State<'_, SettingsStore>,
+    hotkey_state: State<'_, hotkeys::HotkeyManagerState>,
 ) -> Result<AppSettings, String> {
+    let previous_settings = store.load().ok();
     let input_device_ids = if request
         .selected_input_device_id
         .as_deref()
@@ -127,9 +135,33 @@ pub fn save_settings(
         Vec::new()
     };
 
-    store
-        .save(request, LOCAL_MODEL_IDS, API_MODEL_IDS, &input_device_ids)
-        .map_err(|error| error.to_string())
+    let prepared = store
+        .prepare_save(request, LOCAL_MODEL_IDS, API_MODEL_IDS, &input_device_ids)
+        .map_err(|error| error.to_string())?;
+
+    hotkey_state
+        .apply(&app, prepared.hotkey_shortcut(), prepared.hotkey_mode())
+        .map_err(|error| error.to_string())?;
+
+    let mut settings = match store.commit_save(prepared) {
+        Ok(settings) => settings,
+        Err(error) => {
+            if let Some(previous_settings) = previous_settings {
+                if let Err(rollback_error) = hotkey_state.apply(
+                    &app,
+                    &previous_settings.hotkey_shortcut,
+                    previous_settings.hotkey_mode,
+                ) {
+                    return Err(format!(
+                        "{error}. Transcribe Kit also failed to restore the previous global hotkey: {rollback_error}"
+                    ));
+                }
+            }
+            return Err(error.to_string());
+        }
+    };
+    settings.hotkey_registration_error = hotkey_state.registration_error();
+    Ok(settings)
 }
 
 #[tauri::command]

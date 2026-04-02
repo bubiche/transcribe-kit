@@ -7,15 +7,37 @@ pub enum ProviderMode {
     Api,
 }
 
+impl Default for ProviderMode {
+    fn default() -> Self {
+        Self::Local
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HotkeyMode {
+    PushToTalk,
+    Toggle,
+}
+
+impl Default for HotkeyMode {
+    fn default() -> Self {
+        Self::PushToTalk
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
     pub provider_mode: ProviderMode,
     pub local_model_id: String,
     pub selected_input_device_id: Option<String>,
+    pub hotkey_mode: HotkeyMode,
+    pub hotkey_shortcut: String,
     pub api_model_id: String,
     pub api_custom_model_name: String,
     pub api_base_url: String,
     pub api_key_present: bool,
+    pub hotkey_registration_error: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -24,10 +46,13 @@ impl Default for AppSettings {
             provider_mode: ProviderMode::Local,
             local_model_id: "whisper-base".to_string(),
             selected_input_device_id: None,
+            hotkey_mode: HotkeyMode::PushToTalk,
+            hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
             api_model_id: "gpt-4o-mini-transcribe".to_string(),
             api_custom_model_name: String::new(),
             api_base_url: "https://api.openai.com/v1".to_string(),
             api_key_present: false,
+            hotkey_registration_error: None,
         }
     }
 }
@@ -37,6 +62,8 @@ pub struct SaveSettingsRequest {
     pub provider_mode: ProviderMode,
     pub local_model_id: String,
     pub selected_input_device_id: Option<String>,
+    pub hotkey_mode: HotkeyMode,
+    pub hotkey_shortcut: String,
     pub api_model_id: String,
     pub api_custom_model_name: String,
     pub api_base_url: String,

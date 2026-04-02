@@ -1,11 +1,13 @@
 mod audio;
 mod commands;
+mod hotkeys;
 mod input_devices;
 mod models;
 mod providers;
 mod settings;
 
 use commands::LocalEngineState;
+use hotkeys::HotkeyManagerState;
 use settings::SettingsStore;
 use tauri::Manager;
 
@@ -15,10 +17,13 @@ pub fn run() {
     let preload_settings_store = settings_store.clone();
     let engine_state = LocalEngineState::new();
     let preload_engine_state = engine_state.clone();
+    let hotkey_state = HotkeyManagerState::new();
+    let preload_hotkey_state = hotkey_state.clone();
 
     tauri::Builder::default()
         .manage(settings_store)
         .manage(engine_state)
+        .manage(hotkey_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -42,6 +47,7 @@ pub fn run() {
                 preload_engine_state.clone(),
                 preload_settings_store.clone(),
             );
+            preload_hotkey_state.initialize_from_settings(&app.handle(), &preload_settings_store);
             Ok(())
         })
         .run(tauri::generate_context!())

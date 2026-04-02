@@ -4,7 +4,8 @@ use leptos::task::spawn_local;
 use crate::tauri_api::{
     delete_model, ensure_model_downloaded, get_settings, list_api_models, list_input_devices,
     list_local_models, preload_local_model, save_settings, ApiModelDescriptor, AppSettings,
-    AudioInputDeviceDescriptor, LocalModelDescriptor, ProviderMode, SaveSettingsRequest,
+    AudioInputDeviceDescriptor, HotkeyMode, LocalModelDescriptor, ProviderMode,
+    SaveSettingsRequest,
 };
 
 #[derive(Clone, Copy)]
@@ -12,6 +13,8 @@ pub struct SettingsFormState {
     pub provider_mode: RwSignal<ProviderMode>,
     pub local_model_id: RwSignal<String>,
     pub selected_input_device_id: RwSignal<Option<String>>,
+    pub hotkey_mode: RwSignal<HotkeyMode>,
+    pub hotkey_shortcut: RwSignal<String>,
     pub api_model_id: RwSignal<String>,
     pub api_custom_model_name: RwSignal<String>,
     pub api_base_url: RwSignal<String>,
@@ -26,6 +29,8 @@ impl SettingsFormState {
             provider_mode: RwSignal::new(ProviderMode::Local),
             local_model_id: RwSignal::new("whisper-base".to_string()),
             selected_input_device_id: RwSignal::new(None),
+            hotkey_mode: RwSignal::new(HotkeyMode::PushToTalk),
+            hotkey_shortcut: RwSignal::new("CmdOrCtrl+Shift+T".to_string()),
             api_model_id: RwSignal::new("gpt-4o-mini-transcribe".to_string()),
             api_custom_model_name: RwSignal::new(String::new()),
             api_base_url: RwSignal::new("https://api.openai.com/v1".to_string()),
@@ -40,6 +45,8 @@ impl SettingsFormState {
         self.local_model_id.set(settings.local_model_id);
         self.selected_input_device_id
             .set(settings.selected_input_device_id);
+        self.hotkey_mode.set(settings.hotkey_mode);
+        self.hotkey_shortcut.set(settings.hotkey_shortcut);
         self.api_model_id.set(settings.api_model_id);
         self.api_custom_model_name
             .set(settings.api_custom_model_name);
@@ -54,6 +61,8 @@ impl SettingsFormState {
             provider_mode: self.provider_mode.get(),
             local_model_id: self.local_model_id.get(),
             selected_input_device_id: self.selected_input_device_id.get(),
+            hotkey_mode: self.hotkey_mode.get(),
+            hotkey_shortcut: self.hotkey_shortcut.get(),
             api_model_id: self.api_model_id.get(),
             api_custom_model_name: self.api_custom_model_name.get(),
             api_base_url: self.api_base_url.get(),
@@ -117,6 +126,7 @@ pub struct SettingsFeatureState {
     pub api_models: RwSignal<Vec<ApiModelDescriptor>>,
     pub load_error: RwSignal<Option<String>>,
     pub save_feedback: RwSignal<Option<String>>,
+    pub hotkey_registration_error: RwSignal<Option<String>>,
     pub is_loading: RwSignal<bool>,
     pub is_saving: RwSignal<bool>,
     pub download: DownloadState,
@@ -133,6 +143,7 @@ impl SettingsFeatureState {
             api_models: RwSignal::new(Vec::new()),
             load_error: RwSignal::new(None),
             save_feedback: RwSignal::new(None),
+            hotkey_registration_error: RwSignal::new(None),
             is_loading: RwSignal::new(true),
             is_saving: RwSignal::new(false),
             download: DownloadState::new(),
@@ -185,7 +196,11 @@ impl SettingsFeatureState {
             }
 
             match settings_result {
-                Ok(settings) => self.form.apply_settings(settings),
+                Ok(settings) => {
+                    self.hotkey_registration_error
+                        .set(settings.hotkey_registration_error.clone());
+                    self.form.apply_settings(settings);
+                }
                 Err(error) => problems.push(format!("settings: {error}")),
             }
 
@@ -206,12 +221,18 @@ impl SettingsFeatureState {
 
             match save_settings(request).await {
                 Ok(settings) => {
+                    self.hotkey_registration_error
+                        .set(settings.hotkey_registration_error.clone());
                     self.form.apply_settings(settings);
                     self.save_feedback.set(Some(
-                        "Settings saved. API keys stay in the system credential store.".to_string(),
+                        "Settings saved. The recording hotkey stays registered even while the app is in the background.".to_string(),
                     ));
                 }
                 Err(error) => {
+                    if let Ok(settings) = get_settings().await {
+                        self.hotkey_registration_error
+                            .set(settings.hotkey_registration_error.clone());
+                    }
                     self.save_feedback.set(Some(error));
                 }
             }

@@ -1,6 +1,8 @@
 use leptos::prelude::*;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
-use crate::tauri_api::{AudioInputDeviceDescriptor, ProviderMode};
+use crate::tauri_api::{AudioInputDeviceDescriptor, HotkeyMode, ProviderMode};
 
 use super::state::{DownloadState, SettingsFeatureState};
 
@@ -38,6 +40,13 @@ pub fn SettingsScreen() -> impl IntoView {
                 .map(|device| format!("System default ({})", device.label))
                 .unwrap_or_else(|| "System default microphone".to_string()),
         });
+    let selected_hotkey_label = Signal::derive(move || {
+        let mode_label = match state.form.hotkey_mode.get() {
+            HotkeyMode::PushToTalk => "Push-to-talk",
+            HotkeyMode::Toggle => "Toggle",
+        };
+        format!("{mode_label} on {}", state.form.hotkey_shortcut.get())
+    });
     let save_configuration = move |_| state.save();
 
     view! {
@@ -50,6 +59,7 @@ pub fn SettingsScreen() -> impl IntoView {
                 custom_api_selected=custom_api_selected
                 active_api_model_label=active_api_model_label
                 selected_input_device_label=selected_input_device_label
+                selected_hotkey_label=selected_hotkey_label
             />
 
             <Show when=move || state.is_loading.get()>
@@ -71,6 +81,7 @@ pub fn SettingsScreen() -> impl IntoView {
                             selected_input_device_id=state.form.selected_input_device_id
                             input_devices=state.input_devices
                         />
+                        <HotkeySettingsCard state=state />
                         <SettingsActionsCard
                             is_saving=state.is_saving
                             save_feedback=state.save_feedback
@@ -89,7 +100,7 @@ fn SettingsHero() -> impl IntoView {
         <div class="hero">
             <h2>"Provider and model configuration"</h2>
             <p>
-                "Choose your transcription provider, save a preferred microphone for live capture, and keep API keys out of the plain-text config file."
+                "Choose your transcription provider, save a preferred microphone, and configure the global recording hotkey while keeping API keys out of the plain-text config file."
             </p>
         </div>
     }
@@ -103,6 +114,7 @@ fn StatusCards(
     custom_api_selected: Signal<bool>,
     active_api_model_label: Signal<String>,
     selected_input_device_label: Signal<String>,
+    selected_hotkey_label: Signal<String>,
 ) -> impl IntoView {
     view! {
         <div class="status">
@@ -139,6 +151,10 @@ fn StatusCards(
             <div class="status-card">
                 <p class="status-label">"Microphone"</p>
                 <p class="status-value">{move || selected_input_device_label.get()}</p>
+            </div>
+            <div class="status-card">
+                <p class="status-label">"Recording hotkey"</p>
+                <p class="status-value">{move || selected_hotkey_label.get()}</p>
             </div>
         </div>
     }
@@ -307,6 +323,196 @@ fn InputDeviceField(
 }
 
 #[component]
+fn HotkeySettingsCard(state: SettingsFeatureState) -> impl IntoView {
+    let is_capturing = RwSignal::new(false);
+    let capture_preview = RwSignal::new(None::<String>);
+    let capture_feedback = RwSignal::new(None::<String>);
+
+    Effect::new(move |_| {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+
+        let keydown_closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+            if !is_capturing.get_untracked() || event.repeat() {
+                return;
+            }
+
+            let code = event.code();
+            if code == "Tab" {
+                is_capturing.set(false);
+                capture_preview.set(None);
+                return;
+            }
+
+            event.prevent_default();
+            event.stop_propagation();
+
+            if code == "Escape" {
+                is_capturing.set(false);
+                capture_preview.set(None);
+                capture_feedback.set(None);
+                return;
+            }
+
+            if is_modifier_code(&code) {
+                capture_preview.set(Some(format_shortcut_preview(&event, None)));
+                capture_feedback.set(None);
+                return;
+            }
+
+            let captured_shortcut = format_shortcut_value(&event);
+            capture_preview.set(Some(captured_shortcut.clone()));
+
+            if !shortcut_has_modifier(&event) {
+                capture_feedback.set(Some(
+                    "Include at least one modifier key like Cmd, Ctrl, Alt, or Shift.".to_string(),
+                ));
+                return;
+            }
+
+            state.form.hotkey_shortcut.set(captured_shortcut);
+            capture_feedback.set(None);
+            is_capturing.set(false);
+        }) as Box<dyn FnMut(web_sys::KeyboardEvent)>);
+
+        let _ = window
+            .add_event_listener_with_callback("keydown", keydown_closure.as_ref().unchecked_ref());
+        keydown_closure.forget();
+    });
+
+    let hotkey_mode_label = Signal::derive(move || match state.form.hotkey_mode.get() {
+        HotkeyMode::PushToTalk => {
+            "Hold the shortcut to record, then release to stop when live capture is connected."
+                .to_string()
+        }
+        HotkeyMode::Toggle => {
+            "Press once to start and again to stop when live capture is connected.".to_string()
+        }
+    });
+
+    let capture_button_label = Signal::derive(move || {
+        if is_capturing.get() {
+            capture_preview
+                .get()
+                .unwrap_or_else(|| "Press the shortcut now".to_string())
+        } else {
+            state.form.hotkey_shortcut.get()
+        }
+    });
+
+    view! {
+        <section class="section settings-card">
+            <p class="tag">"Hotkey"</p>
+            <h3>"Global recording shortcut"</h3>
+            <p class="body-copy">
+                "This shortcut is registered globally, so it can still trigger while Transcribe Kit is running in the background."
+            </p>
+
+            <label class="field">
+                <span class="field-label">"Recording mode"</span>
+                <select
+                    prop:value=move || match state.form.hotkey_mode.get() {
+                        HotkeyMode::PushToTalk => "push-to-talk",
+                        HotkeyMode::Toggle => "toggle",
+                    }
+                    on:change=move |event| {
+                        match event_target_value(&event).as_str() {
+                            "toggle" => state.form.hotkey_mode.set(HotkeyMode::Toggle),
+                            _ => state.form.hotkey_mode.set(HotkeyMode::PushToTalk),
+                        }
+                    }
+                >
+                    <option value="push-to-talk">"Push-to-talk"</option>
+                    <option value="toggle">"Toggle"</option>
+                </select>
+            </label>
+
+            <label class="field">
+                <span class="field-label">"Shortcut"</span>
+                <button
+                    type="button"
+                    class="hotkey-capture-button"
+                    class:hotkey-capture-button-listening=move || is_capturing.get()
+                    on:click=move |_| {
+                        let next = !is_capturing.get_untracked();
+                        is_capturing.set(next);
+                        capture_preview.set(None);
+                        capture_feedback.set(None);
+                    }
+                >
+                    {move || capture_button_label.get()}
+                </button>
+            </label>
+
+            <p class="field-hint">
+                "Click the control, then press the shortcut you want. Press Escape to cancel or Tab to move on."
+            </p>
+            <p class="field-hint">{move || hotkey_mode_label.get()}</p>
+            <p class="field-hint">
+                "Test it by pressing the hotkey here for an in-app banner, then switch to another app and press it again to flash the dock or taskbar."
+            </p>
+
+            <Show when=move || capture_feedback.get().is_some()>
+                <p class="field-hint field-warning">
+                    {move || capture_feedback.get().unwrap_or_default()}
+                </p>
+            </Show>
+
+            <Show when=move || state.hotkey_registration_error.get().is_some()>
+                <p class="field-hint field-warning">
+                    {move || state.hotkey_registration_error.get().unwrap_or_default()}
+                </p>
+            </Show>
+        </section>
+    }
+}
+
+fn shortcut_has_modifier(event: &web_sys::KeyboardEvent) -> bool {
+    event.ctrl_key() || event.alt_key() || event.shift_key() || event.meta_key()
+}
+
+fn is_modifier_code(code: &str) -> bool {
+    matches!(
+        code,
+        "AltLeft"
+            | "AltRight"
+            | "ControlLeft"
+            | "ControlRight"
+            | "MetaLeft"
+            | "MetaRight"
+            | "ShiftLeft"
+            | "ShiftRight"
+    )
+}
+
+fn format_shortcut_value(event: &web_sys::KeyboardEvent) -> String {
+    format_shortcut_preview(event, Some(event.code()))
+}
+
+fn format_shortcut_preview(event: &web_sys::KeyboardEvent, key_code: Option<String>) -> String {
+    let mut parts = Vec::new();
+
+    if event.ctrl_key() {
+        parts.push("Ctrl".to_string());
+    }
+    if event.alt_key() {
+        parts.push("Alt".to_string());
+    }
+    if event.shift_key() {
+        parts.push("Shift".to_string());
+    }
+    if event.meta_key() {
+        parts.push("Cmd".to_string());
+    }
+    if let Some(key_code) = key_code {
+        parts.push(key_code);
+    }
+
+    parts.join("+")
+}
+
+#[component]
 fn SettingsActionsCard(
     is_saving: RwSignal<bool>,
     save_feedback: RwSignal<Option<String>>,
@@ -317,7 +523,7 @@ fn SettingsActionsCard(
             <p class="tag">"Apply"</p>
             <h3>"Save configuration"</h3>
             <p class="body-copy">
-                "Provider, model, and microphone preferences are stored together so the app opens in the same state next time."
+                "Provider, model, microphone, and hotkey preferences are stored together so the app opens in the same state next time."
             </p>
 
             <button class="primary-button" on:click=on_save disabled=move || is_saving.get()>

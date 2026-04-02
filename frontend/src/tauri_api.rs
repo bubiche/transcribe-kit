@@ -1,6 +1,7 @@
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 #[wasm_bindgen(inline_js = r#"
 export async function invoke(command, args) {
@@ -64,6 +65,12 @@ export async function writeClipboardText(text) {
     throw new Error('Clipboard copy failed');
   }
 }
+
+export async function listenToAppEvent(eventName, onEvent) {
+  return await window.__TAURI__.event.listen(eventName, (event) => {
+    onEvent(event.payload);
+  });
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(catch, js_name = invoke)]
@@ -86,6 +93,12 @@ extern "C" {
 
     #[wasm_bindgen(catch, js_name = writeClipboardText)]
     async fn write_clipboard_text_js(text: &str) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = listenToAppEvent)]
+    async fn listen_to_app_event_js(
+        event_name: &str,
+        on_event: &Closure<dyn Fn(JsValue)>,
+    ) -> Result<JsValue, JsValue>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,15 +108,40 @@ pub enum ProviderMode {
     Api,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HotkeyMode {
+    PushToTalk,
+    Toggle,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HotkeyActivityState {
+    Pressed,
+    Released,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HotkeyActivityEvent {
+    pub shortcut: String,
+    pub mode: HotkeyMode,
+    pub state: HotkeyActivityState,
+    pub triggered_while_background: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
     pub provider_mode: ProviderMode,
     pub local_model_id: String,
     pub selected_input_device_id: Option<String>,
+    pub hotkey_mode: HotkeyMode,
+    pub hotkey_shortcut: String,
     pub api_model_id: String,
     pub api_custom_model_name: String,
     pub api_base_url: String,
     pub api_key_present: bool,
+    pub hotkey_registration_error: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -112,10 +150,13 @@ impl Default for AppSettings {
             provider_mode: ProviderMode::Local,
             local_model_id: "whisper-base".to_string(),
             selected_input_device_id: None,
+            hotkey_mode: HotkeyMode::PushToTalk,
+            hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
             api_model_id: "gpt-4o-mini-transcribe".to_string(),
             api_custom_model_name: String::new(),
             api_base_url: "https://api.openai.com/v1".to_string(),
             api_key_present: false,
+            hotkey_registration_error: None,
         }
     }
 }
@@ -125,6 +166,8 @@ pub struct SaveSettingsRequest {
     pub provider_mode: ProviderMode,
     pub local_model_id: String,
     pub selected_input_device_id: Option<String>,
+    pub hotkey_mode: HotkeyMode,
+    pub hotkey_shortcut: String,
     pub api_model_id: String,
     pub api_custom_model_name: String,
     pub api_base_url: String,
@@ -376,6 +419,29 @@ pub async fn write_clipboard_text(text: &str) -> Result<(), String> {
         .await
         .map_err(js_error_message)
         .map(|_| ())
+}
+
+pub async fn listen_to_app_event(
+    event_name: &str,
+    on_event: impl Fn(JsValue) + 'static,
+) -> Result<Box<dyn FnOnce()>, String> {
+    let closure = Closure::wrap(Box::new(move |value: JsValue| {
+        on_event(value);
+    }) as Box<dyn Fn(JsValue)>);
+
+    let unlisten = listen_to_app_event_js(event_name, &closure)
+        .await
+        .map_err(js_error_message)?;
+
+    closure.forget();
+
+    let unlisten_fn = unlisten
+        .dyn_into::<js_sys::Function>()
+        .map_err(|_| "Tauri event listener returned an unexpected value".to_string())?;
+
+    Ok(Box::new(move || {
+        let _ = unlisten_fn.call0(&JsValue::NULL);
+    }))
 }
 
 pub async fn pick_audio_file() -> Result<Option<String>, String> {
