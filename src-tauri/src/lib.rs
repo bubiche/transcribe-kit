@@ -2,12 +2,14 @@ mod audio;
 mod commands;
 mod hotkeys;
 mod input_devices;
+mod live_recording;
 mod models;
 mod providers;
 mod settings;
 
 use commands::LocalEngineState;
 use hotkeys::HotkeyManagerState;
+use live_recording::LiveRecordingManagerState;
 use settings::SettingsStore;
 use tauri::Manager;
 
@@ -19,16 +21,19 @@ pub fn run() {
     let preload_engine_state = engine_state.clone();
     let hotkey_state = HotkeyManagerState::new();
     let preload_hotkey_state = hotkey_state.clone();
+    let live_recording_state = LiveRecordingManagerState::new();
 
     tauri::Builder::default()
         .manage(settings_store)
         .manage(engine_state)
         .manage(hotkey_state)
+        .manage(live_recording_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             commands::health_check,
+            commands::get_live_recording_status,
             commands::get_settings,
             commands::list_local_models,
             commands::list_input_devices,
@@ -38,6 +43,8 @@ pub fn run() {
             commands::delete_model,
             commands::ensure_model_downloaded,
             commands::preload_local_model,
+            commands::start_live_transcription,
+            commands::stop_live_transcription,
             commands::start_file_transcription
         ])
         .setup(move |app| {

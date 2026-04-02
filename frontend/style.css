@@ -75,6 +75,74 @@ body {
   font-size: 0.96rem;
 }
 
+.recording-banner {
+  max-width: 1180px;
+  margin: 0 auto 1rem;
+  padding: 1rem 1.1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(21, 35, 24, 0.1);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 12px 28px rgba(20, 40, 23, 0.08);
+}
+
+.recording-banner-active {
+  border-color: rgba(31, 122, 77, 0.24);
+  background: linear-gradient(135deg, rgba(215, 240, 222, 0.96), rgba(255, 255, 255, 0.92));
+}
+
+.recording-banner-error {
+  border-color: rgba(161, 75, 59, 0.22);
+  background: linear-gradient(135deg, rgba(255, 244, 241, 0.96), rgba(255, 255, 255, 0.92));
+}
+
+.recording-banner-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.recording-banner-status {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.recording-banner-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: rgba(21, 35, 24, 0.25);
+  box-shadow: 0 0 0 6px rgba(21, 35, 24, 0.06);
+}
+
+.recording-banner-active .recording-banner-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 6px rgba(31, 122, 77, 0.12);
+}
+
+.recording-banner-error .recording-banner-dot {
+  background: #a14b3b;
+  box-shadow: 0 0 0 6px rgba(161, 75, 59, 0.1);
+}
+
+.recording-banner-title,
+.recording-banner-copy {
+  margin: 0;
+}
+
+.recording-banner-title {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.recording-banner-copy {
+  margin-top: 0.6rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .frame {
   max-width: 1180px;
   margin: 0 auto;

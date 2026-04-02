@@ -1,0 +1,559 @@
+use std::{cell::Cell, rc::Rc};
+
+#[cfg(target_arch = "wasm32")]
+use js_sys::Date;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use wasm_bindgen::JsValue;
+
+use crate::tauri_api::{
+    get_live_recording_status, get_settings, list_input_devices, listen_to_app_event,
+    start_live_transcription, stop_live_transcription, AppSettings, AudioInputDeviceDescriptor,
+    HotkeyActivityEvent, HotkeyActivityState, HotkeyMode, LiveRecordingResult, LiveRecordingState,
+    LiveRecordingStatus,
+};
+
+pub const HOTKEY_ACTIVITY_EVENT_NAME: &str = "transcribe-kit://live-recording-hotkey";
+pub const LIVE_RECORDING_STATUS_EVENT_NAME: &str = "transcribe-kit://live-recording-status";
+
+#[derive(Clone, Copy)]
+pub struct LiveRecordingController {
+    pub status: RwSignal<LiveRecordingStatus>,
+    pub armed_input_label: RwSignal<String>,
+    pub recording_started_at_ms: RwSignal<Option<f64>>,
+    pub feedback_message: RwSignal<Option<String>>,
+    pub error_message: RwSignal<Option<String>>,
+    pub load_error: RwSignal<Option<String>>,
+    pub device_context_error: RwSignal<Option<String>>,
+    pub last_result: RwSignal<Option<LiveRecordingResult>>,
+    pub is_ready: RwSignal<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveRecordingCommand {
+    Start,
+    Stop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StopUiTransition {
+    status: LiveRecordingStatus,
+    armed_input_label: Option<String>,
+    last_result: Option<LiveRecordingResult>,
+    feedback_message: Option<String>,
+    error_message: Option<String>,
+}
+
+impl LiveRecordingController {
+    pub fn new() -> Self {
+        Self {
+            status: RwSignal::new(idle_status()),
+            armed_input_label: RwSignal::new("System default microphone".to_string()),
+            recording_started_at_ms: RwSignal::new(None),
+            feedback_message: RwSignal::new(None),
+            error_message: RwSignal::new(None),
+            load_error: RwSignal::new(None),
+            device_context_error: RwSignal::new(None),
+            last_result: RwSignal::new(None),
+            is_ready: RwSignal::new(false),
+        }
+    }
+
+    pub fn initialize(self) {
+        let desired_recording = Rc::new(Cell::new(false));
+        let request_in_flight = Rc::new(Cell::new(false));
+
+        self.refresh_armed_device_context();
+
+        let bootstrap_desired_recording = Rc::clone(&desired_recording);
+        spawn_local(async move {
+            match get_live_recording_status().await {
+                Ok(status) => {
+                    bootstrap_desired_recording
+                        .set(matches!(status.state, LiveRecordingState::Recording));
+                    self.apply_status(status);
+                }
+                Err(error) => {
+                    self.load_error.set(Some(format!(
+                        "Live recording status could not be loaded: {error}"
+                    )));
+                }
+            }
+
+            self.is_ready.set(true);
+        });
+
+        let hotkey_desired_recording = Rc::clone(&desired_recording);
+        let hotkey_request_in_flight = Rc::clone(&request_in_flight);
+        spawn_local(async move {
+            let _ = listen_to_app_event(HOTKEY_ACTIVITY_EVENT_NAME, {
+                let controller = self;
+                let desired_recording = Rc::clone(&hotkey_desired_recording);
+                let request_in_flight = Rc::clone(&hotkey_request_in_flight);
+
+                move |value: JsValue| {
+                    let Ok(event) = serde_wasm_bindgen::from_value::<HotkeyActivityEvent>(value)
+                    else {
+                        return;
+                    };
+
+                    let current_recording = matches!(
+                        controller.status.get_untracked().state,
+                        LiveRecordingState::Recording
+                    );
+                    let desired = desired_recording.get();
+
+                    let Some(next_goal) =
+                        desired_recording_goal(event.mode, event.state, current_recording, desired)
+                    else {
+                        return;
+                    };
+
+                    desired_recording.set(next_goal);
+                    reconcile_recording_goal(
+                        controller,
+                        Rc::clone(&desired_recording),
+                        Rc::clone(&request_in_flight),
+                    );
+                }
+            })
+            .await;
+        });
+
+        let status_desired_recording = Rc::clone(&desired_recording);
+        let status_request_in_flight = Rc::clone(&request_in_flight);
+        spawn_local(async move {
+            let _ = listen_to_app_event(LIVE_RECORDING_STATUS_EVENT_NAME, {
+                let controller = self;
+                let desired_recording = Rc::clone(&status_desired_recording);
+                let request_in_flight = Rc::clone(&status_request_in_flight);
+                move |value: JsValue| {
+                    let Ok(status) = serde_wasm_bindgen::from_value::<LiveRecordingStatus>(value)
+                    else {
+                        return;
+                    };
+
+                    if !request_in_flight.get() {
+                        desired_recording
+                            .set(matches!(status.state, LiveRecordingState::Recording));
+                    }
+                    controller.apply_status(status);
+                }
+            })
+            .await;
+        });
+    }
+
+    pub fn refresh_armed_device_context(self) {
+        spawn_local(async move {
+            let settings_result = get_settings().await;
+            let devices_result = list_input_devices().await;
+
+            match (settings_result, devices_result) {
+                (Ok(settings), Ok(devices)) => {
+                    self.armed_input_label
+                        .set(resolve_armed_input_label(&settings, &devices));
+                    self.device_context_error.set(None);
+                }
+                (Err(settings_error), Err(devices_error)) => {
+                    self.device_context_error.set(Some(format!(
+                        "Saved recording device context could not be refreshed: settings: {settings_error} | input devices: {devices_error}"
+                    )));
+                }
+                (Err(error), _) => {
+                    self.device_context_error.set(Some(format!(
+                        "Saved recording settings could not be refreshed: {error}"
+                    )));
+                }
+                (_, Err(error)) => {
+                    self.device_context_error.set(Some(format!(
+                        "Available microphones could not be refreshed: {error}"
+                    )));
+                }
+            }
+        });
+    }
+
+    fn apply_status(self, status: LiveRecordingStatus) {
+        self.load_error.set(None);
+
+        if let Some(label) = status.input_device_label.clone() {
+            self.armed_input_label.set(label);
+            self.device_context_error.set(None);
+        }
+
+        if matches!(status.state, LiveRecordingState::Recording) {
+            let baseline_duration_ms = status.duration_ms.unwrap_or_default() as f64;
+            self.recording_started_at_ms
+                .set(Some((now_ms() - baseline_duration_ms).max(0.0)));
+            self.error_message.set(None);
+            self.feedback_message.set(None);
+            self.last_result.set(None);
+        } else {
+            self.recording_started_at_ms.set(None);
+        }
+
+        if let Some(message) = status.message.clone() {
+            self.error_message.set(Some(message));
+        }
+
+        self.status.set(status);
+    }
+}
+
+fn reconcile_recording_goal(
+    controller: LiveRecordingController,
+    desired_recording: Rc<Cell<bool>>,
+    request_in_flight: Rc<Cell<bool>>,
+) {
+    if request_in_flight.get() {
+        return;
+    }
+
+    let is_recording = matches!(
+        controller.status.get_untracked().state,
+        LiveRecordingState::Recording
+    );
+    let Some(command) = next_command_for_goal(is_recording, desired_recording.get()) else {
+        return;
+    };
+
+    request_in_flight.set(true);
+    controller.error_message.set(None);
+
+    match command {
+        LiveRecordingCommand::Start => {
+            controller.last_result.set(None);
+            controller
+                .feedback_message
+                .set(Some("Starting live capture...".to_string()));
+
+            spawn_local(async move {
+                match start_live_transcription().await {
+                    Ok(status) => {
+                        controller.apply_status(status);
+                    }
+                    Err(error) => {
+                        desired_recording.set(false);
+                        controller.status.set(idle_status());
+                        controller.recording_started_at_ms.set(None);
+                        controller
+                            .error_message
+                            .set(Some(format!("Live capture did not start: {error}")));
+                        controller.feedback_message.set(None);
+                        controller.refresh_armed_device_context();
+                    }
+                }
+
+                request_in_flight.set(false);
+                reconcile_recording_goal(controller, desired_recording, request_in_flight);
+            });
+        }
+        LiveRecordingCommand::Stop => {
+            controller
+                .feedback_message
+                .set(Some("Stopping live capture...".to_string()));
+
+            spawn_local(async move {
+                let transition = stop_ui_transition(stop_live_transcription().await);
+                apply_stop_ui_transition(controller, &transition);
+
+                if transition.armed_input_label.is_some() {
+                    controller.refresh_armed_device_context();
+                }
+
+                request_in_flight.set(false);
+                reconcile_recording_goal(controller, desired_recording, request_in_flight);
+            });
+        }
+    }
+}
+
+fn resolve_armed_input_label(
+    settings: &AppSettings,
+    devices: &[AudioInputDeviceDescriptor],
+) -> String {
+    match settings.selected_input_device_id.as_deref() {
+        Some(selected_id) => devices
+            .iter()
+            .find(|device| device.id == selected_id)
+            .map(|device| device.label.clone())
+            .unwrap_or_else(|| "Previously selected microphone unavailable".to_string()),
+        None => devices
+            .iter()
+            .find(|device| device.is_default)
+            .map(|device| format!("System default ({})", device.label))
+            .unwrap_or_else(|| "System default microphone".to_string()),
+    }
+}
+
+fn desired_recording_goal(
+    mode: HotkeyMode,
+    state: HotkeyActivityState,
+    current_recording: bool,
+    desired_recording: bool,
+) -> Option<bool> {
+    match mode {
+        HotkeyMode::PushToTalk => Some(matches!(state, HotkeyActivityState::Pressed)),
+        HotkeyMode::Toggle => match state {
+            HotkeyActivityState::Pressed => Some(if current_recording == desired_recording {
+                !current_recording
+            } else {
+                !desired_recording
+            }),
+            HotkeyActivityState::Released => None,
+        },
+    }
+}
+
+fn next_command_for_goal(
+    is_recording: bool,
+    desired_recording: bool,
+) -> Option<LiveRecordingCommand> {
+    match (is_recording, desired_recording) {
+        (false, true) => Some(LiveRecordingCommand::Start),
+        (true, false) => Some(LiveRecordingCommand::Stop),
+        _ => None,
+    }
+}
+
+fn idle_status() -> LiveRecordingStatus {
+    LiveRecordingStatus {
+        state: LiveRecordingState::Idle,
+        input_device_id: None,
+        input_device_label: None,
+        output_file_path: None,
+        sample_rate_hz: None,
+        channels: None,
+        duration_ms: None,
+        message: None,
+    }
+}
+
+pub fn format_duration(duration_ms: u64) -> String {
+    let total_seconds = duration_ms / 1000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{minutes:02}:{seconds:02}")
+}
+
+pub fn live_elapsed_duration_ms(
+    status: &LiveRecordingStatus,
+    recording_started_at_ms: Option<f64>,
+) -> u64 {
+    if !matches!(status.state, LiveRecordingState::Recording) {
+        return status.duration_ms.unwrap_or_default();
+    }
+
+    let wall_clock_duration_ms = recording_started_at_ms
+        .map(|started_at_ms| (now_ms() - started_at_ms).max(0.0) as u64)
+        .unwrap_or_default();
+
+    wall_clock_duration_ms.max(status.duration_ms.unwrap_or_default())
+}
+
+fn stop_ui_transition(result: Result<LiveRecordingResult, String>) -> StopUiTransition {
+    match result {
+        Ok(result) => StopUiTransition {
+            status: idle_status(),
+            armed_input_label: Some(result.input_device_label.clone()),
+            last_result: Some(result.clone()),
+            feedback_message: Some(format!(
+                "Capture stopped. Temporary WAV saved from {} ({}, {} Hz, {} ch).",
+                result.input_device_label,
+                format_duration(result.duration_ms),
+                result.sample_rate_hz,
+                result.channels
+            )),
+            error_message: None,
+        },
+        Err(error) => StopUiTransition {
+            status: idle_status(),
+            armed_input_label: None,
+            last_result: None,
+            feedback_message: None,
+            error_message: Some(format!("Live capture did not stop cleanly: {error}")),
+        },
+    }
+}
+
+fn apply_stop_ui_transition(controller: LiveRecordingController, transition: &StopUiTransition) {
+    if let Some(label) = transition.armed_input_label.clone() {
+        controller.armed_input_label.set(label);
+    }
+
+    controller.status.set(transition.status.clone());
+    controller.recording_started_at_ms.set(None);
+    controller.last_result.set(transition.last_result.clone());
+    controller
+        .feedback_message
+        .set(transition.feedback_message.clone());
+    controller
+        .error_message
+        .set(transition.error_message.clone());
+}
+
+fn now_ms() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Date::now()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64() * 1000.0)
+            .unwrap_or(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_to_talk_press_starts_recording() {
+        let goal = desired_recording_goal(
+            HotkeyMode::PushToTalk,
+            HotkeyActivityState::Pressed,
+            false,
+            false,
+        );
+
+        assert_eq!(goal, Some(true));
+    }
+
+    #[test]
+    fn push_to_talk_release_stops_recording() {
+        let goal = desired_recording_goal(
+            HotkeyMode::PushToTalk,
+            HotkeyActivityState::Released,
+            true,
+            true,
+        );
+
+        assert_eq!(goal, Some(false));
+    }
+
+    #[test]
+    fn toggle_press_starts_when_idle() {
+        let goal = desired_recording_goal(
+            HotkeyMode::Toggle,
+            HotkeyActivityState::Pressed,
+            false,
+            false,
+        );
+
+        assert_eq!(goal, Some(true));
+    }
+
+    #[test]
+    fn toggle_press_stops_when_already_recording() {
+        let goal =
+            desired_recording_goal(HotkeyMode::Toggle, HotkeyActivityState::Pressed, true, true);
+
+        assert_eq!(goal, Some(false));
+    }
+
+    #[test]
+    fn toggle_release_does_not_change_goal() {
+        let goal = desired_recording_goal(
+            HotkeyMode::Toggle,
+            HotkeyActivityState::Released,
+            true,
+            true,
+        );
+
+        assert_eq!(goal, None);
+    }
+
+    #[test]
+    fn toggle_press_flips_pending_goal_while_start_is_in_flight() {
+        let goal = desired_recording_goal(
+            HotkeyMode::Toggle,
+            HotkeyActivityState::Pressed,
+            false,
+            true,
+        );
+
+        assert_eq!(goal, Some(false));
+    }
+
+    #[test]
+    fn live_elapsed_duration_uses_wall_clock_when_recording() {
+        let status = LiveRecordingStatus {
+            state: LiveRecordingState::Recording,
+            input_device_id: None,
+            input_device_label: None,
+            output_file_path: None,
+            sample_rate_hz: None,
+            channels: None,
+            duration_ms: Some(1_000),
+            message: None,
+        };
+
+        let elapsed = live_elapsed_duration_ms(&status, Some(now_ms() - 3_200.0));
+
+        assert!(elapsed >= 3_000);
+    }
+
+    #[test]
+    fn live_elapsed_duration_falls_back_to_status_when_idle() {
+        let status = LiveRecordingStatus {
+            state: LiveRecordingState::Idle,
+            input_device_id: None,
+            input_device_label: None,
+            output_file_path: None,
+            sample_rate_hz: None,
+            channels: None,
+            duration_ms: Some(4_200),
+            message: None,
+        };
+
+        assert_eq!(live_elapsed_duration_ms(&status, Some(now_ms())), 4_200);
+    }
+
+    #[test]
+    fn stop_failure_transition_returns_idle_error_state() {
+        let transition = stop_ui_transition(Err("writer finalize failed".to_string()));
+
+        assert_eq!(transition.status.state, LiveRecordingState::Idle);
+        assert_eq!(
+            transition.error_message.as_deref(),
+            Some("Live capture did not stop cleanly: writer finalize failed")
+        );
+        assert_eq!(transition.feedback_message, None);
+        assert_eq!(transition.last_result, None);
+        assert_eq!(transition.armed_input_label, None);
+    }
+
+    #[test]
+    fn stop_success_transition_returns_idle_success_state() {
+        let transition = stop_ui_transition(Ok(LiveRecordingResult {
+            file_path: "/tmp/capture.wav".to_string(),
+            input_device_id: Some("mic-1".to_string()),
+            input_device_label: "Desk Mic".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            duration_ms: 5_200,
+        }));
+
+        assert_eq!(transition.status.state, LiveRecordingState::Idle);
+        assert_eq!(transition.error_message, None);
+        assert_eq!(transition.armed_input_label.as_deref(), Some("Desk Mic"));
+        assert_eq!(
+            transition.feedback_message.as_deref(),
+            Some("Capture stopped. Temporary WAV saved from Desk Mic (00:05, 48000 Hz, 2 ch).")
+        );
+        assert_eq!(
+            transition
+                .last_result
+                .as_ref()
+                .map(|result| result.file_path.as_str()),
+            Some("/tmp/capture.wav")
+        );
+    }
+}

@@ -2,12 +2,13 @@ use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+use crate::live_recording::LiveRecordingController;
 use crate::tauri_api::{AudioInputDeviceDescriptor, HotkeyMode, ProviderMode};
 
 use super::state::{DownloadState, SettingsFeatureState};
 
 #[component]
-pub fn SettingsScreen() -> impl IntoView {
+pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView {
     let state = SettingsFeatureState::new();
 
     Effect::new(move |_| {
@@ -47,7 +48,10 @@ pub fn SettingsScreen() -> impl IntoView {
         };
         format!("{mode_label} on {}", state.form.hotkey_shortcut.get())
     });
-    let save_configuration = move |_| state.save();
+    let save_configuration = move |_| {
+        let controller = live_recording;
+        state.save(move || controller.refresh_armed_device_context());
+    };
 
     view! {
         <section class="panel content">
@@ -242,7 +246,7 @@ fn InputDeviceField(
                 .find(|device| device.is_default)
                 .map(|device| format!("System default is currently {}.", device.label))
                 .unwrap_or_else(|| {
-                    "System default will follow the OS microphone choice when live recording ships in Phase 3b."
+                    "System default will follow the OS microphone choice whenever live capture starts."
                         .to_string()
                 }),
         }
@@ -264,7 +268,7 @@ fn InputDeviceField(
                     <p class="tag">"Audio input"</p>
                     <h4>"Choose the microphone for live recording"</h4>
                     <p class="body-copy">
-                        "This dropdown controls which microphone Phase 3b will use when live capture is enabled."
+                        "This dropdown controls which microphone the live capture pipeline will use when recording starts."
                     </p>
                 </div>
                 <span class="mini-chip">{move || device_count_label.get()}</span>

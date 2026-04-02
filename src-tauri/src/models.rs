@@ -127,6 +127,35 @@ pub enum InputType {
     Live,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LiveRecordingState {
+    Idle,
+    Recording,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveRecordingStatus {
+    pub state: LiveRecordingState,
+    pub input_device_id: Option<String>,
+    pub input_device_label: Option<String>,
+    pub output_file_path: Option<String>,
+    pub sample_rate_hz: Option<u32>,
+    pub channels: Option<u16>,
+    pub duration_ms: Option<u64>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveRecordingResult {
+    pub file_path: String,
+    pub input_device_id: Option<String>,
+    pub input_device_label: String,
+    pub sample_rate_hz: u32,
+    pub channels: u16,
+    pub duration_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptionSource {
     pub provider: String,

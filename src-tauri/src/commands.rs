@@ -5,11 +5,12 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::{
-    audio, hotkeys, input_devices,
+    audio, hotkeys, input_devices, live_recording,
     models::{
         ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType,
-        LocalModelDescriptor, ModelDownloadProgress, ModelStatus, SaveSettingsRequest,
-        StartFileTranscriptionRequest, TranscriptResult, TranscriptionStreamEvent,
+        LiveRecordingResult, LiveRecordingStatus, LocalModelDescriptor, ModelDownloadProgress,
+        ModelStatus, SaveSettingsRequest, StartFileTranscriptionRequest, TranscriptResult,
+        TranscriptionStreamEvent,
     },
     providers::{local_whisper, local_whisper::WhisperEngine},
     settings::SettingsStore,
@@ -99,6 +100,35 @@ pub fn list_api_models() -> Vec<ApiModelDescriptor> {
             supports_custom_name: true,
         },
     ]
+}
+
+#[tauri::command]
+pub fn get_live_recording_status(
+    live_recording_state: State<'_, live_recording::LiveRecordingManagerState>,
+) -> LiveRecordingStatus {
+    live_recording_state.current_status()
+}
+
+#[tauri::command]
+pub fn start_live_transcription(
+    app: tauri::AppHandle,
+    settings_store: State<'_, SettingsStore>,
+    live_recording_state: State<'_, live_recording::LiveRecordingManagerState>,
+) -> Result<LiveRecordingStatus, String> {
+    let settings = settings_store.load().map_err(|error| error.to_string())?;
+    live_recording_state
+        .start(&app, settings.selected_input_device_id.as_deref())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn stop_live_transcription(
+    app: tauri::AppHandle,
+    live_recording_state: State<'_, live_recording::LiveRecordingManagerState>,
+) -> Result<LiveRecordingResult, String> {
+    live_recording_state
+        .stop(&app)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

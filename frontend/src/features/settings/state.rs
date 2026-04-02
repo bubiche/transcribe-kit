@@ -212,7 +212,7 @@ impl SettingsFeatureState {
         });
     }
 
-    pub fn save(self) {
+    pub fn save(self, on_saved: impl Fn() + 'static) {
         let request = self.form.build_save_request();
 
         spawn_local(async move {
@@ -227,6 +227,7 @@ impl SettingsFeatureState {
                     self.save_feedback.set(Some(
                         "Settings saved. The recording hotkey stays registered even while the app is in the background.".to_string(),
                     ));
+                    on_saved();
                 }
                 Err(error) => {
                     if let Ok(settings) = get_settings().await {
