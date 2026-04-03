@@ -46,6 +46,15 @@ export async function transcribeFile(filePath, onUpdate) {
   });
 }
 
+export async function transcribeLiveRecording(request, onUpdate) {
+  const channel = new window.__TAURI__.core.Channel();
+  channel.onmessage = onUpdate;
+  return await window.__TAURI__.core.invoke('transcribe_live_recording', {
+    request,
+    onUpdate: channel,
+  });
+}
+
 export async function writeClipboardText(text) {
   if (navigator?.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
@@ -88,6 +97,12 @@ extern "C" {
     #[wasm_bindgen(catch, js_name = transcribeFile)]
     async fn transcribe_file_js(
         file_path: &str,
+        on_update: &Closure<dyn Fn(JsValue)>,
+    ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = transcribeLiveRecording)]
+    async fn transcribe_live_recording_js(
+        request: JsValue,
         on_update: &Closure<dyn Fn(JsValue)>,
     ) -> Result<JsValue, JsValue>;
 
@@ -257,6 +272,14 @@ pub struct LiveRecordingResult {
     pub input_device_label: String,
     pub sample_rate_hz: u32,
     pub channels: u16,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranscribeLiveRecordingRequest {
+    pub file_path: String,
+    pub input_device_id: Option<String>,
+    pub input_device_label: String,
     pub duration_ms: u64,
 }
 
@@ -447,6 +470,26 @@ pub async fn start_file_transcription(
     }) as Box<dyn Fn(JsValue)>);
 
     let result = transcribe_file_js(file_path, &closure)
+        .await
+        .map_err(js_error_message);
+
+    closure.forget();
+    result
+        .and_then(|value| serde_wasm_bindgen::from_value(value).map_err(|error| error.to_string()))
+}
+
+pub async fn transcribe_live_recording(
+    request: TranscribeLiveRecordingRequest,
+    on_update: impl Fn(TranscriptionStreamEvent) + 'static,
+) -> Result<TranscriptResult, String> {
+    let request = serde_wasm_bindgen::to_value(&request).map_err(js_error_message)?;
+    let closure = Closure::wrap(Box::new(move |value: JsValue| {
+        if let Some(event) = parse_transcription_stream_event(&value) {
+            on_update(event);
+        }
+    }) as Box<dyn Fn(JsValue)>);
+
+    let result = transcribe_live_recording_js(request, &closure)
         .await
         .map_err(js_error_message);
 

@@ -1,25 +1,51 @@
+use leptos::html::Section;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use wasm_bindgen::JsCast;
 
-use crate::tauri_api::{InputType, TranscriptResult, TranscriptionJobState};
+use crate::live_recording::format_duration;
+use crate::tauri_api::LiveRecordingState;
+use crate::tauri_api::{
+    InputType, TranscriptResult, TranscriptionJobState, TranscriptionJobStatus,
+};
 
 use super::controller::TranscriptionController;
 use super::utils::{format_duration_label, format_timestamp, format_transcript_with_timestamps};
 
 #[component]
-pub fn JobStatusPanel(controller: TranscriptionController) -> impl IntoView {
-    let status_class = Signal::derive(move || match controller.job_status.get().state {
-        TranscriptionJobState::Idle => "job-status-panel",
-        TranscriptionJobState::Running => "job-status-panel running",
-        TranscriptionJobState::Succeeded => "job-status-panel success",
-        TranscriptionJobState::Failed => "job-status-panel error",
+pub fn JobStatusPanel(
+    controller: TranscriptionController,
+    live_recording_state: Signal<LiveRecordingState>,
+    live_recording_label: Signal<String>,
+    live_recording_elapsed_ms: Signal<u64>,
+) -> impl IntoView {
+    let is_listening =
+        Signal::derive(move || matches!(live_recording_state.get(), LiveRecordingState::Recording));
+
+    let status_class = Signal::derive(move || {
+        if is_listening.get() {
+            "job-status-panel running"
+        } else {
+            match controller.job_status.get().state {
+                TranscriptionJobState::Idle => "job-status-panel",
+                TranscriptionJobState::Running => "job-status-panel running",
+                TranscriptionJobState::Succeeded => "job-status-panel success",
+                TranscriptionJobState::Failed => "job-status-panel error",
+            }
+        }
     });
 
-    let status_label = Signal::derive(move || match controller.job_status.get().state {
-        TranscriptionJobState::Idle => "Ready",
-        TranscriptionJobState::Running => "Transcribing",
-        TranscriptionJobState::Succeeded => "Completed",
-        TranscriptionJobState::Failed => "Needs attention",
+    let status_label = Signal::derive(move || {
+        if is_listening.get() {
+            "Listening"
+        } else {
+            match controller.job_status.get().state {
+                TranscriptionJobState::Idle => "Ready",
+                TranscriptionJobState::Running => "Transcribing",
+                TranscriptionJobState::Succeeded => "Completed",
+                TranscriptionJobState::Failed => "Needs attention",
+            }
+        }
     });
 
     view! {
@@ -27,14 +53,21 @@ pub fn JobStatusPanel(controller: TranscriptionController) -> impl IntoView {
             <p class="status-label">{move || status_label.get()}</p>
             <p class="job-status-copy">
                 {move || {
-                    controller
-                        .job_status
-                        .get()
-                        .message
-                        .unwrap_or_else(|| {
-                            "Choose a file or start live capture to begin a transcription job."
-                                .to_string()
-                        })
+                    if is_listening.get() {
+                        listening_status_message(
+                            &live_recording_label.get(),
+                            live_recording_elapsed_ms.get(),
+                        )
+                    } else {
+                        controller
+                            .job_status
+                            .get()
+                            .message
+                            .unwrap_or_else(|| {
+                                "Choose a file or start live capture to begin a transcription job."
+                                    .to_string()
+                            })
+                    }
                 }}
             </p>
         </div>
@@ -42,9 +75,20 @@ pub fn JobStatusPanel(controller: TranscriptionController) -> impl IntoView {
 }
 
 #[component]
-pub fn TranscriptResultPanel(controller: TranscriptionController) -> impl IntoView {
+pub fn TranscriptResultPanel(
+    active: Signal<bool>,
+    controller: TranscriptionController,
+    live_recording_state: Signal<LiveRecordingState>,
+    live_recording_label: Signal<String>,
+    live_recording_elapsed_ms: Signal<u64>,
+) -> impl IntoView {
+    let panel_ref = NodeRef::<Section>::new();
     let copy_feedback_error = RwSignal::new(false);
     let copy_feedback_target = RwSignal::new(None::<&'static str>);
+    let last_focused_completion_nonce = RwSignal::new(None::<u64>);
+    let highlighted_completion_nonce = RwSignal::new(None::<u64>);
+    let is_listening =
+        Signal::derive(move || matches!(live_recording_state.get(), LiveRecordingState::Recording));
 
     let plain_copy_text = Signal::derive(move || {
         controller
@@ -63,7 +107,8 @@ pub fn TranscriptResultPanel(controller: TranscriptionController) -> impl IntoVi
         format_transcript_with_timestamps(&controller.partial_segments.get(), &current_partial_text)
     });
 
-    let can_copy = Signal::derive(move || !plain_copy_text.get().trim().is_empty());
+    let can_copy =
+        Signal::derive(move || can_copy_transcript(is_listening.get(), &plain_copy_text.get()));
     let plain_button_class = Signal::derive(move || {
         if copy_feedback_target.get() == Some("plain") {
             if copy_feedback_error.get() {
@@ -116,6 +161,28 @@ pub fn TranscriptResultPanel(controller: TranscriptionController) -> impl IntoVi
         copy_feedback_target.set(None);
     });
 
+    Effect::new(move |_| {
+        let job_status = controller.job_status.get();
+        let transcript = controller.transcript.get();
+        let completion_nonce = controller.completion_nonce.get();
+        let last_focused_nonce = last_focused_completion_nonce.get();
+        if should_focus_live_transcript(
+            active.get(),
+            is_listening.get(),
+            &job_status,
+            transcript.as_ref(),
+            completion_nonce,
+            last_focused_nonce,
+        ) {
+            if let Some(panel) = panel_ref.get() {
+                panel.scroll_into_view();
+                let _ = panel.focus();
+            }
+            last_focused_completion_nonce.set(Some(completion_nonce));
+            trigger_live_completion_highlight(highlighted_completion_nonce, completion_nonce);
+        }
+    });
+
     let copy_plain = move |_| {
         let text = plain_copy_text.get_untracked();
         if text.trim().is_empty() {
@@ -163,9 +230,24 @@ pub fn TranscriptResultPanel(controller: TranscriptionController) -> impl IntoVi
     };
 
     view! {
-        <section class="section transcript-result-section">
+        <section
+            node_ref=panel_ref
+            tabindex="-1"
+            class="section transcript-result-section"
+            class:transcript-result-section-live-complete=move || {
+                highlighted_completion_nonce.get() == Some(controller.completion_nonce.get())
+            }
+        >
             <p class="tag">"Result"</p>
             <h3>"Transcript review"</h3>
+            <Show when=move || {
+                highlighted_completion_nonce.get() == Some(controller.completion_nonce.get())
+                    && !is_listening.get()
+            }>
+                <div class="transcript-success-banner" role="status" aria-live="polite">
+                    "Live transcript ready"
+                </div>
+            </Show>
             <div class="result-toolbar">
                 <div class="copy-actions">
                     <button
@@ -186,39 +268,137 @@ pub fn TranscriptResultPanel(controller: TranscriptionController) -> impl IntoVi
             </div>
 
             <Show
-                when=move || controller.transcript.get().is_some()
+                when=move || is_listening.get()
                 fallback=move || {
-                    view! {
-                        <Show
-                            when=move || !controller.partial_text.get().is_empty()
-                            fallback=move || {
-                                view! {
-                                    <p class="body-copy">
-                                        {move || {
-                                            match controller.job_status.get().state {
-                                                TranscriptionJobState::Failed => {
-                                                    controller
-                                                        .job_status
-                                                        .get()
-                                                        .message
-                                                        .unwrap_or_else(|| "Transcription failed.".to_string())
-                                                }
-                                                _ => "Your transcript will appear here once audio finishes processing.".to_string(),
-                                            }
-                                        }}
-                                    </p>
-                                }
-                            }
-                        >
-                            <PartialTranscriptPanel controller=controller />
-                        </Show>
-                    }
+                    view! { <TranscriptPanelBody controller=controller /> }
                 }
             >
-                {move || controller.transcript.get().map(render_transcript_result)}
+                <ListeningIndicator
+                    live_recording_label=live_recording_label
+                    live_recording_elapsed_ms=live_recording_elapsed_ms
+                />
             </Show>
         </section>
     }
+}
+
+#[component]
+fn TranscriptPanelBody(controller: TranscriptionController) -> impl IntoView {
+    view! {
+        <Show
+            when=move || controller.transcript.get().is_some()
+            fallback=move || {
+                view! {
+                    <Show
+                        when=move || !controller.partial_text.get().is_empty()
+                        fallback=move || {
+                            view! {
+                                <p class="body-copy">
+                                    {move || {
+                                        match controller.job_status.get().state {
+                                            TranscriptionJobState::Failed => {
+                                                controller
+                                                    .job_status
+                                                    .get()
+                                                    .message
+                                                    .unwrap_or_else(|| "Transcription failed.".to_string())
+                                            }
+                                            _ => "Your transcript will appear here once audio finishes processing.".to_string(),
+                                        }
+                                    }}
+                                </p>
+                            }
+                        }
+                    >
+                        <PartialTranscriptPanel controller=controller />
+                    </Show>
+                }
+            }
+        >
+            {move || controller.transcript.get().map(render_transcript_result)}
+        </Show>
+    }
+}
+
+#[component]
+fn ListeningIndicator(
+    live_recording_label: Signal<String>,
+    live_recording_elapsed_ms: Signal<u64>,
+) -> impl IntoView {
+    view! {
+        <div class="listening-indicator" role="status" aria-live="polite">
+            <div class="listening-indicator-row">
+                <span class="listening-indicator-badge">
+                    <span class="listening-indicator-dot"></span>
+                    "Listening"
+                </span>
+                <span class="listening-indicator-wave" aria-hidden="true">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </span>
+            </div>
+            <div class="mini-status">
+                <span class="mini-chip">{move || format!("Mic: {}", live_recording_label.get())}</span>
+                <span class="mini-chip">
+                    {move || format!("Elapsed: {}", format_duration(live_recording_elapsed_ms.get()))}
+                </span>
+            </div>
+            <p class="body-copy">
+                "Your microphone is active. Release the hotkey or press it again to stop and generate the transcript."
+            </p>
+        </div>
+    }
+}
+
+fn listening_status_message(input_label: &str, elapsed_ms: u64) -> String {
+    format!(
+        "Recording from {input_label}. Stop recording to generate the transcript. Elapsed: {}.",
+        format_duration(elapsed_ms)
+    )
+}
+
+fn can_copy_transcript(is_listening: bool, text: &str) -> bool {
+    !is_listening && !text.trim().is_empty()
+}
+
+fn trigger_live_completion_highlight(
+    highlighted_completion_nonce: RwSignal<Option<u64>>,
+    completion_nonce: u64,
+) {
+    highlighted_completion_nonce.set(Some(completion_nonce));
+
+    let clear_signal = highlighted_completion_nonce;
+    let timeout_closure = wasm_bindgen::closure::Closure::once_into_js(move || {
+        if clear_signal.get_untracked() == Some(completion_nonce) {
+            clear_signal.set(None);
+        }
+    });
+
+    if let Some(window) = web_sys::window() {
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            timeout_closure.as_ref().unchecked_ref(),
+            2400,
+        );
+    }
+}
+
+fn should_focus_live_transcript(
+    active: bool,
+    is_listening: bool,
+    job_status: &TranscriptionJobStatus,
+    transcript: Option<&TranscriptResult>,
+    completion_nonce: u64,
+    last_focused_completion_nonce: Option<u64>,
+) -> bool {
+    active
+        && !is_listening
+        && matches!(job_status.state, TranscriptionJobState::Succeeded)
+        && matches!(job_status.input_type, InputType::Live)
+        && last_focused_completion_nonce != Some(completion_nonce)
+        && transcript
+            .map(|result| matches!(result.source.input_type, InputType::Live))
+            .unwrap_or(false)
 }
 
 #[component]
@@ -385,5 +565,76 @@ mod tests {
     fn source_name_fallback_matches_input_type() {
         assert_eq!(source_name_fallback(InputType::File), "Imported file");
         assert_eq!(source_name_fallback(InputType::Live), "Live recording");
+    }
+
+    #[test]
+    fn can_copy_transcript_is_disabled_while_listening() {
+        assert!(can_copy_transcript(false, "hello world"));
+        assert!(!can_copy_transcript(true, "hello world"));
+        assert!(!can_copy_transcript(false, "   "));
+    }
+
+    #[test]
+    fn listening_status_message_includes_source_and_elapsed_time() {
+        assert_eq!(
+            listening_status_message("Desk Mic", 5_200),
+            "Recording from Desk Mic. Stop recording to generate the transcript. Elapsed: 00:05."
+        );
+    }
+
+    #[test]
+    fn should_focus_live_transcript_only_for_active_live_success() {
+        let live_result = TranscriptResult {
+            text: "hello".to_string(),
+            segments: Vec::new(),
+            source: crate::tauri_api::TranscriptionSource {
+                provider: "whisper".to_string(),
+                model_id: "whisper-base".to_string(),
+                input_type: InputType::Live,
+                source_name: Some("Desk Mic".to_string()),
+                duration_ms: Some(1_000),
+            },
+            post_processed_text: None,
+        };
+
+        let live_status = TranscriptionJobStatus {
+            state: TranscriptionJobState::Succeeded,
+            input_type: InputType::Live,
+            source_name: Some("Desk Mic".to_string()),
+            message: Some("Transcript ready for review.".to_string()),
+        };
+
+        assert!(should_focus_live_transcript(
+            true,
+            false,
+            &live_status,
+            Some(&live_result),
+            3,
+            Some(2),
+        ));
+        assert!(!should_focus_live_transcript(
+            false,
+            false,
+            &live_status,
+            Some(&live_result),
+            3,
+            Some(2),
+        ));
+        assert!(!should_focus_live_transcript(
+            true,
+            true,
+            &live_status,
+            Some(&live_result),
+            3,
+            Some(2),
+        ));
+        assert!(!should_focus_live_transcript(
+            true,
+            false,
+            &live_status,
+            Some(&live_result),
+            3,
+            Some(3),
+        ));
     }
 }

@@ -7,7 +7,7 @@ use leptos::task::spawn_local;
 
 use crate::tauri_api::{
     get_settings, list_local_models, pick_audio_file, start_file_transcription, AppSettings,
-    InputType, LocalModelDescriptor, ProviderMode,
+    InputType, LiveRecordingState, LocalModelDescriptor, ProviderMode,
 };
 
 pub use self::controller::TranscriptionController;
@@ -15,13 +15,18 @@ pub use self::panels::{JobStatusPanel, TranscriptResultPanel};
 use self::utils::file_name_from_path;
 
 #[component]
-pub fn TranscribeScreen(active: Signal<bool>) -> impl IntoView {
+pub fn TranscribeScreen(
+    active: Signal<bool>,
+    transcription: TranscriptionController,
+    live_recording_state: Signal<LiveRecordingState>,
+    live_recording_label: Signal<String>,
+    live_recording_elapsed_ms: Signal<u64>,
+) -> impl IntoView {
     let settings = RwSignal::new(AppSettings::default());
     let local_models = RwSignal::new(Vec::<LocalModelDescriptor>::new());
     let selected_file = RwSignal::new(None::<String>);
     let load_error = RwSignal::new(None::<String>);
     let is_loading = RwSignal::new(true);
-    let transcription = TranscriptionController::new();
 
     Effect::new(move |_| {
         if !active.get() {
@@ -86,8 +91,13 @@ pub fn TranscribeScreen(active: Signal<bool>) -> impl IntoView {
             .unwrap_or_else(|| "No file selected yet".to_string())
     });
 
+    let is_listening =
+        Signal::derive(move || matches!(live_recording_state.get(), LiveRecordingState::Recording));
+
     let action_button_label = Signal::derive(move || {
-        if transcription.is_transcribing.get() {
+        if is_listening.get() {
+            "Listening...".to_string()
+        } else if transcription.is_transcribing.get() {
             "Transcribing...".to_string()
         } else {
             "Choose audio file".to_string()
@@ -96,7 +106,7 @@ pub fn TranscribeScreen(active: Signal<bool>) -> impl IntoView {
 
     let on_choose_file = move |_| {
         spawn_local(async move {
-            if transcription.is_transcribing.get_untracked() {
+            if is_listening.get_untracked() || transcription.is_transcribing.get_untracked() {
                 return;
             }
 
@@ -218,7 +228,9 @@ pub fn TranscribeScreen(active: Signal<bool>) -> impl IntoView {
                                 <button
                                     class="primary-button"
                                     on:click=on_choose_file
-                                    disabled=move || transcription.is_transcribing.get()
+                                    disabled=move || {
+                                        is_listening.get() || transcription.is_transcribing.get()
+                                    }
                                 >
                                     {move || action_button_label.get()}
                                 </button>
@@ -238,12 +250,23 @@ pub fn TranscribeScreen(active: Signal<bool>) -> impl IntoView {
                                     </span>
                                 </div>
 
-                                <JobStatusPanel controller=transcription />
+                                <JobStatusPanel
+                                    controller=transcription
+                                    live_recording_state=live_recording_state
+                                    live_recording_label=live_recording_label
+                                    live_recording_elapsed_ms=live_recording_elapsed_ms
+                                />
                             </div>
                         </div>
                     </section>
 
-                    <TranscriptResultPanel controller=transcription />
+                    <TranscriptResultPanel
+                        active=active
+                        controller=transcription
+                        live_recording_state=live_recording_state
+                        live_recording_label=live_recording_label
+                        live_recording_elapsed_ms=live_recording_elapsed_ms
+                    />
                 </div>
             </Show>
         </section>

@@ -6,11 +6,12 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsValue;
 
+use crate::features::transcription::TranscriptionController;
 use crate::tauri_api::{
     get_live_recording_status, get_settings, list_input_devices, listen_to_app_event,
-    start_live_transcription, stop_live_transcription, AppSettings, AudioInputDeviceDescriptor,
-    HotkeyActivityEvent, HotkeyActivityState, HotkeyMode, LiveRecordingResult, LiveRecordingState,
-    LiveRecordingStatus,
+    start_live_transcription, stop_live_transcription, transcribe_live_recording, AppSettings,
+    AudioInputDeviceDescriptor, HotkeyActivityEvent, HotkeyActivityState, HotkeyMode, InputType,
+    LiveRecordingResult, LiveRecordingState, LiveRecordingStatus, TranscribeLiveRecordingRequest,
 };
 
 pub const HOTKEY_ACTIVITY_EVENT_NAME: &str = "transcribe-kit://live-recording-hotkey";
@@ -27,6 +28,7 @@ pub struct LiveRecordingController {
     pub device_context_error: RwSignal<Option<String>>,
     pub last_result: RwSignal<Option<LiveRecordingResult>>,
     pub is_ready: RwSignal<bool>,
+    pub transcription: TranscriptionController,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +47,7 @@ struct StopUiTransition {
 }
 
 impl LiveRecordingController {
-    pub fn new() -> Self {
+    pub fn new(transcription: TranscriptionController) -> Self {
         Self {
             status: RwSignal::new(idle_status()),
             armed_input_label: RwSignal::new("System default microphone".to_string()),
@@ -56,6 +58,7 @@ impl LiveRecordingController {
             device_context_error: RwSignal::new(None),
             last_result: RwSignal::new(None),
             is_ready: RwSignal::new(false),
+            transcription,
         }
     }
 
@@ -206,14 +209,24 @@ fn reconcile_recording_goal(
     desired_recording: Rc<Cell<bool>>,
     request_in_flight: Rc<Cell<bool>>,
 ) {
-    if request_in_flight.get() {
-        return;
-    }
-
     let is_recording = matches!(
         controller.status.get_untracked().state,
         LiveRecordingState::Recording
     );
+    if desired_recording.get() && controller.transcription.is_transcribing.get_untracked() {
+        desired_recording.set(false);
+        controller.error_message.set(None);
+        controller.feedback_message.set(Some(
+            "Wait for the current transcription job to finish before starting another live capture."
+                .to_string(),
+        ));
+        return;
+    }
+
+    if request_in_flight.get() {
+        return;
+    }
+
     let Some(command) = next_command_for_goal(is_recording, desired_recording.get()) else {
         return;
     };
@@ -255,11 +268,21 @@ fn reconcile_recording_goal(
                 .set(Some("Stopping live capture...".to_string()));
 
             spawn_local(async move {
-                let transition = stop_ui_transition(stop_live_transcription().await);
-                apply_stop_ui_transition(controller, &transition);
+                match stop_live_transcription().await {
+                    Ok(result) => {
+                        let transition = stop_ui_transition(Ok(result.clone()));
+                        apply_stop_ui_transition(controller, &transition);
 
-                if transition.armed_input_label.is_some() {
-                    controller.refresh_armed_device_context();
+                        if transition.armed_input_label.is_some() {
+                            controller.refresh_armed_device_context();
+                        }
+
+                        run_live_transcription(controller, result).await;
+                    }
+                    Err(error) => {
+                        let transition = stop_ui_transition(Err(error));
+                        apply_stop_ui_transition(controller, &transition);
+                    }
                 }
 
                 request_in_flight.set(false);
@@ -375,6 +398,68 @@ fn stop_ui_transition(result: Result<LiveRecordingResult, String>) -> StopUiTran
             error_message: Some(format!("Live capture did not stop cleanly: {error}")),
         },
     }
+}
+
+async fn run_live_transcription(
+    controller: LiveRecordingController,
+    capture_result: LiveRecordingResult,
+) {
+    let source_name = live_transcription_source_name(&capture_result);
+    controller.error_message.set(None);
+    controller.feedback_message.set(Some(format!(
+        "Transcribing live recording from {source_name}..."
+    )));
+    controller.transcription.start_live_job(source_name.clone());
+
+    let progress_controller = controller.transcription;
+    match transcribe_live_recording(
+        TranscribeLiveRecordingRequest {
+            file_path: capture_result.file_path.clone(),
+            input_device_id: capture_result.input_device_id.clone(),
+            input_device_label: capture_result.input_device_label.clone(),
+            duration_ms: capture_result.duration_ms,
+        },
+        move |event| {
+            progress_controller.apply_stream_event(event);
+        },
+    )
+    .await
+    {
+        Ok(result) => {
+            controller.transcription.complete_job(result);
+            controller.error_message.set(None);
+            controller.feedback_message.set(Some(format!(
+                "Live transcript ready for review from {source_name}."
+            )));
+        }
+        Err(error) => {
+            controller
+                .transcription
+                .fail_job(InputType::Live, Some(source_name), error.clone());
+            controller.feedback_message.set(None);
+            controller
+                .error_message
+                .set(Some(format!("Live transcription failed: {error}")));
+        }
+    }
+}
+
+fn live_transcription_source_name(result: &LiveRecordingResult) -> String {
+    let trimmed_label = result.input_device_label.trim();
+    if !trimmed_label.is_empty() {
+        return trimmed_label.to_string();
+    }
+
+    let trimmed_id = result
+        .input_device_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(device_id) = trimmed_id {
+        return device_id.to_string();
+    }
+
+    "Live recording".to_string()
 }
 
 fn apply_stop_ui_transition(controller: LiveRecordingController, transition: &StopUiTransition) {
@@ -517,6 +602,32 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_recording_goal_rejects_new_start_while_transcribing() {
+        let transcription = TranscriptionController::new();
+        transcription.is_transcribing.set(true);
+        transcription
+            .job_status
+            .update(|status| status.input_type = InputType::Live);
+
+        let controller = LiveRecordingController::new(transcription);
+        let desired_recording = Rc::new(Cell::new(true));
+        let request_in_flight = Rc::new(Cell::new(true));
+
+        reconcile_recording_goal(
+            controller,
+            Rc::clone(&desired_recording),
+            Rc::clone(&request_in_flight),
+        );
+
+        assert!(!desired_recording.get());
+        assert_eq!(
+            controller.feedback_message.get().as_deref(),
+            Some("Wait for the current transcription job to finish before starting another live capture.")
+        );
+        assert_eq!(controller.error_message.get(), None);
+    }
+
+    #[test]
     fn stop_failure_transition_returns_idle_error_state() {
         let transition = stop_ui_transition(Err("writer finalize failed".to_string()));
 
@@ -555,5 +666,42 @@ mod tests {
                 .map(|result| result.file_path.as_str()),
             Some("/tmp/capture.wav")
         );
+    }
+
+    #[test]
+    fn live_transcription_source_name_prefers_trimmed_device_label() {
+        let source_name = live_transcription_source_name(&LiveRecordingResult {
+            file_path: "/tmp/capture.wav".to_string(),
+            input_device_id: Some("mic-1".to_string()),
+            input_device_label: "  Desk Mic  ".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            duration_ms: 5_200,
+        });
+
+        assert_eq!(source_name, "Desk Mic");
+    }
+
+    #[test]
+    fn live_transcription_source_name_falls_back_to_device_id_then_default() {
+        let source_name = live_transcription_source_name(&LiveRecordingResult {
+            file_path: "/tmp/capture.wav".to_string(),
+            input_device_id: Some(" mic-1 ".to_string()),
+            input_device_label: "   ".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            duration_ms: 5_200,
+        });
+        assert_eq!(source_name, "mic-1");
+
+        let fallback_name = live_transcription_source_name(&LiveRecordingResult {
+            file_path: "/tmp/capture.wav".to_string(),
+            input_device_id: None,
+            input_device_label: String::new(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            duration_ms: 5_200,
+        });
+        assert_eq!(fallback_name, "Live recording");
     }
 }

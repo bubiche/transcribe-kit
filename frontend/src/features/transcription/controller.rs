@@ -13,6 +13,7 @@ pub struct TranscriptionController {
     pub progress_percent: RwSignal<Option<i32>>,
     pub job_status: RwSignal<TranscriptionJobStatus>,
     pub is_transcribing: RwSignal<bool>,
+    pub completion_nonce: RwSignal<u64>,
 }
 
 impl TranscriptionController {
@@ -24,6 +25,7 @@ impl TranscriptionController {
             progress_percent: RwSignal::new(None),
             job_status: RwSignal::new(idle_job_status(InputType::File)),
             is_transcribing: RwSignal::new(false),
+            completion_nonce: RwSignal::new(0),
         }
     }
 
@@ -100,6 +102,8 @@ impl TranscriptionController {
         self.partial_segments.set(result.segments.clone());
         self.progress_percent.set(Some(100));
         self.is_transcribing.set(false);
+        self.completion_nonce
+            .update(|nonce| *nonce = nonce.saturating_add(1));
         self.job_status.set(TranscriptionJobStatus {
             state: TranscriptionJobState::Succeeded,
             input_type: result.source.input_type.clone(),
@@ -168,5 +172,223 @@ fn start_message(source_name: &str) -> String {
         "Transcribing audio".to_string()
     } else {
         format!("Transcribing {source_name}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tauri_api::TranscriptionSource;
+
+    #[test]
+    fn start_live_job_clears_previous_result_and_enters_running_state() {
+        let controller = TranscriptionController::new();
+        controller.transcript.set(Some(sample_result(
+            InputType::File,
+            Some("old-note.wav"),
+            "old text",
+            vec![sample_segment(0, 800, "old text")],
+        )));
+        controller.partial_text.set("stale partial".to_string());
+        controller
+            .partial_segments
+            .set(vec![sample_segment(0, 400, "stale partial")]);
+        controller.progress_percent.set(Some(87));
+
+        controller.start_live_job("Desk Mic");
+
+        assert_eq!(controller.transcript.get(), None);
+        assert_eq!(controller.partial_text.get(), "");
+        assert!(controller.partial_segments.get().is_empty());
+        assert_eq!(controller.progress_percent.get(), Some(0));
+        assert!(controller.is_transcribing.get());
+        assert_eq!(
+            controller.job_status.get(),
+            TranscriptionJobStatus {
+                state: TranscriptionJobState::Running,
+                input_type: InputType::Live,
+                source_name: Some("Desk Mic".to_string()),
+                message: Some("Transcribing Desk Mic".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn apply_stream_event_updates_live_progress_and_replaces_segment_by_index() {
+        let controller = TranscriptionController::new();
+        controller.start_live_job("Desk Mic");
+
+        controller.apply_stream_event(TranscriptionStreamEvent::Progress {
+            progress_percent: 42,
+        });
+        assert_eq!(controller.progress_percent.get(), Some(42));
+        assert_eq!(
+            controller.job_status.get().message.as_deref(),
+            Some("Transcribing Desk Mic (42%)")
+        );
+
+        controller.apply_stream_event(TranscriptionStreamEvent::Segment {
+            segment_index: 0,
+            segment: sample_segment(0, 900, "hello"),
+            accumulated_text: "hello".to_string(),
+        });
+        controller.apply_stream_event(TranscriptionStreamEvent::Segment {
+            segment_index: 0,
+            segment: sample_segment(0, 1_100, "hello there"),
+            accumulated_text: "hello there".to_string(),
+        });
+
+        assert_eq!(controller.partial_text.get(), "hello there");
+        assert_eq!(
+            controller.partial_segments.get(),
+            vec![sample_segment(0, 1_100, "hello there")]
+        );
+        assert_eq!(
+            controller.job_status.get().message.as_deref(),
+            Some("Receiving transcript segments from Whisper...")
+        );
+        assert_eq!(controller.job_status.get().input_type, InputType::Live);
+    }
+
+    #[test]
+    fn complete_job_promotes_live_result_into_review_state() {
+        let controller = TranscriptionController::new();
+        controller.start_live_job("Desk Mic");
+        controller.partial_text.set("draft".to_string());
+        controller
+            .partial_segments
+            .set(vec![sample_segment(0, 300, "draft")]);
+
+        let result = sample_result(
+            InputType::Live,
+            Some("Desk Mic"),
+            "final transcript",
+            vec![
+                sample_segment(0, 500, "final"),
+                sample_segment(500, 1_000, "transcript"),
+            ],
+        );
+
+        controller.complete_job(result.clone());
+
+        assert_eq!(controller.transcript.get(), Some(result));
+        assert_eq!(controller.partial_text.get(), "final transcript");
+        assert_eq!(
+            controller.partial_segments.get(),
+            vec![
+                sample_segment(0, 500, "final"),
+                sample_segment(500, 1_000, "transcript"),
+            ]
+        );
+        assert_eq!(controller.progress_percent.get(), Some(100));
+        assert!(!controller.is_transcribing.get());
+        assert_eq!(controller.completion_nonce.get(), 1);
+        assert_eq!(
+            controller.job_status.get(),
+            TranscriptionJobStatus {
+                state: TranscriptionJobState::Succeeded,
+                input_type: InputType::Live,
+                source_name: Some("Desk Mic".to_string()),
+                message: Some("Transcript ready for review.".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn fail_job_clears_stale_transcript_and_preserves_partial_draft() {
+        let controller = TranscriptionController::new();
+        controller.transcript.set(Some(sample_result(
+            InputType::File,
+            Some("old-note.wav"),
+            "old text",
+            vec![sample_segment(0, 800, "old text")],
+        )));
+        controller
+            .partial_text
+            .set("partial live draft".to_string());
+        controller
+            .partial_segments
+            .set(vec![sample_segment(0, 700, "partial live draft")]);
+        controller.progress_percent.set(Some(63));
+        controller.is_transcribing.set(true);
+
+        controller.fail_job(
+            InputType::Live,
+            Some("Desk Mic".to_string()),
+            "Whisper failed",
+        );
+
+        assert_eq!(controller.transcript.get(), None);
+        assert_eq!(controller.partial_text.get(), "partial live draft");
+        assert_eq!(
+            controller.partial_segments.get(),
+            vec![sample_segment(0, 700, "partial live draft")]
+        );
+        assert_eq!(controller.progress_percent.get(), None);
+        assert!(!controller.is_transcribing.get());
+        assert_eq!(
+            controller.job_status.get(),
+            TranscriptionJobStatus {
+                state: TranscriptionJobState::Failed,
+                input_type: InputType::Live,
+                source_name: Some("Desk Mic".to_string()),
+                message: Some("Whisper failed".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn set_preflight_failure_clears_partial_state() {
+        let controller = TranscriptionController::new();
+        controller.partial_text.set("stale".to_string());
+        controller
+            .partial_segments
+            .set(vec![sample_segment(0, 500, "stale")]);
+        controller.progress_percent.set(Some(10));
+        controller.is_transcribing.set(true);
+
+        controller.set_preflight_failure(InputType::Live, "Provider mismatch");
+
+        assert_eq!(controller.partial_text.get(), "");
+        assert!(controller.partial_segments.get().is_empty());
+        assert_eq!(controller.progress_percent.get(), None);
+        assert!(!controller.is_transcribing.get());
+        assert_eq!(
+            controller.job_status.get(),
+            TranscriptionJobStatus {
+                state: TranscriptionJobState::Failed,
+                input_type: InputType::Live,
+                source_name: None,
+                message: Some("Provider mismatch".to_string()),
+            }
+        );
+    }
+
+    fn sample_result(
+        input_type: InputType,
+        source_name: Option<&str>,
+        text: &str,
+        segments: Vec<TranscriptSegment>,
+    ) -> TranscriptResult {
+        TranscriptResult {
+            text: text.to_string(),
+            segments,
+            source: TranscriptionSource {
+                provider: "whisper".to_string(),
+                model_id: "whisper-base".to_string(),
+                input_type,
+                source_name: source_name.map(str::to_string),
+                duration_ms: Some(1_000),
+            },
+            post_processed_text: None,
+        }
+    }
+
+    fn sample_segment(start_ms: i64, end_ms: i64, text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            start_ms,
+            end_ms,
+            text: text.to_string(),
+        }
     }
 }
