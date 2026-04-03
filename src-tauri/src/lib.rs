@@ -5,6 +5,7 @@ mod input_devices;
 mod live_recording;
 mod models;
 mod providers;
+mod recording_tray;
 mod settings;
 
 use commands::LocalEngineState;
@@ -45,11 +46,15 @@ pub fn run() {
             commands::preload_local_model,
             commands::start_live_transcription,
             commands::stop_live_transcription,
-            commands::start_file_transcription
+            commands::start_file_transcription,
+            commands::transcribe_live_recording
         ])
         .setup(move |app| {
             let main_window = app.get_webview_window("main").expect("main window");
             main_window.set_title("Transcribe Kit")?;
+            if let Err(error) = recording_tray::initialize(app.handle()) {
+                eprintln!("Failed to initialize tray icon: {error}");
+            }
             commands::preload_saved_local_model(
                 preload_engine_state.clone(),
                 preload_settings_store.clone(),

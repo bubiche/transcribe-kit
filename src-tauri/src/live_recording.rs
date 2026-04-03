@@ -16,7 +16,10 @@ use cpal::{
 };
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::models::{LiveRecordingResult, LiveRecordingState, LiveRecordingStatus};
+use crate::{
+    models::{LiveRecordingResult, LiveRecordingState, LiveRecordingStatus},
+    recording_tray,
+};
 
 pub const LIVE_RECORDING_STATUS_EVENT_NAME: &str = "transcribe-kit://live-recording-status";
 
@@ -112,6 +115,7 @@ impl LiveRecordingManagerState {
         drop(guard);
 
         emit_status(app, &status);
+        recording_tray::set_recording(app, &status);
         Ok(status)
     }
 
@@ -129,6 +133,7 @@ impl LiveRecordingManagerState {
 
         let result = active.stop();
         emit_status(app, &LiveRecordingStatus::idle());
+        recording_tray::set_idle(app);
         result
     }
 }

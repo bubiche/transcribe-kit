@@ -191,6 +191,14 @@ pub struct StartFileTranscriptionRequest {
     pub file_path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranscribeLiveRecordingRequest {
+    pub file_path: String,
+    pub input_device_id: Option<String>,
+    pub input_device_label: String,
+    pub duration_ms: u64,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
