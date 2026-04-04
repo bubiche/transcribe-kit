@@ -156,6 +156,15 @@ fn should_navigate_to_live_transcript(
             .unwrap_or(false)
 }
 
+fn live_transcribing_detail_copy(
+    feedback_message: Option<String>,
+    job_message: Option<String>,
+) -> String {
+    feedback_message
+        .or(job_message)
+        .unwrap_or_else(|| "Transcribing live recording...".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +205,29 @@ mod tests {
             &live_status,
             Some(&live_result),
         ));
+    }
+
+    #[test]
+    fn live_transcribing_detail_copy_prefers_feedback_over_progress_copy() {
+        assert_eq!(
+            live_transcribing_detail_copy(
+                Some("Wait for the current transcription job to finish.".to_string()),
+                Some("Transcribing Desk Mic (42%)".to_string()),
+            ),
+            "Wait for the current transcription job to finish."
+        );
+    }
+
+    #[test]
+    fn live_transcribing_detail_copy_falls_back_to_job_message_then_default() {
+        assert_eq!(
+            live_transcribing_detail_copy(None, Some("Transcribing Desk Mic (42%)".to_string())),
+            "Transcribing Desk Mic (42%)"
+        );
+        assert_eq!(
+            live_transcribing_detail_copy(None, None),
+            "Transcribing live recording..."
+        );
     }
 }
 
@@ -324,13 +356,10 @@ fn LiveRecordingBanner(
         }
 
         if is_live_transcribing.get() {
-            return controller
-                .transcription
-                .job_status
-                .get()
-                .message
-                .or_else(|| controller.feedback_message.get())
-                .unwrap_or_else(|| "Transcribing live recording...".to_string());
+            return live_transcribing_detail_copy(
+                controller.feedback_message.get(),
+                controller.transcription.job_status.get().message,
+            );
         }
 
         if let Some(message) = controller.feedback_message.get() {

@@ -12,6 +12,7 @@ use crate::tauri_api::{
     start_live_transcription, stop_live_transcription, transcribe_live_recording, AppSettings,
     AudioInputDeviceDescriptor, HotkeyActivityEvent, HotkeyActivityState, HotkeyMode, InputType,
     LiveRecordingResult, LiveRecordingState, LiveRecordingStatus, TranscribeLiveRecordingRequest,
+    TranscriptResult,
 };
 
 pub const HOTKEY_ACTIVITY_EVENT_NAME: &str = "transcribe-kit://live-recording-hotkey";
@@ -26,7 +27,7 @@ pub struct LiveRecordingController {
     pub error_message: RwSignal<Option<String>>,
     pub load_error: RwSignal<Option<String>>,
     pub device_context_error: RwSignal<Option<String>>,
-    pub last_result: RwSignal<Option<LiveRecordingResult>>,
+    pub last_result: RwSignal<Option<LiveRecordingSummary>>,
     pub is_ready: RwSignal<bool>,
     pub transcription: TranscriptionController,
 }
@@ -41,9 +42,17 @@ enum LiveRecordingCommand {
 struct StopUiTransition {
     status: LiveRecordingStatus,
     armed_input_label: Option<String>,
-    last_result: Option<LiveRecordingResult>,
+    last_result: Option<LiveRecordingSummary>,
     feedback_message: Option<String>,
     error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveRecordingSummary {
+    pub input_device_label: String,
+    pub sample_rate_hz: u32,
+    pub channels: u16,
+    pub duration_ms: u64,
 }
 
 impl LiveRecordingController {
@@ -380,7 +389,7 @@ fn stop_ui_transition(result: Result<LiveRecordingResult, String>) -> StopUiTran
         Ok(result) => StopUiTransition {
             status: idle_status(),
             armed_input_label: Some(result.input_device_label.clone()),
-            last_result: Some(result.clone()),
+            last_result: Some(live_recording_summary(&result)),
             feedback_message: Some(format!(
                 "Capture stopped. Temporary WAV saved from {} ({}, {} Hz, {} ch).",
                 result.input_device_label,
@@ -405,11 +414,7 @@ async fn run_live_transcription(
     capture_result: LiveRecordingResult,
 ) {
     let source_name = live_transcription_source_name(&capture_result);
-    controller.error_message.set(None);
-    controller.feedback_message.set(Some(format!(
-        "Transcribing live recording from {source_name}..."
-    )));
-    controller.transcription.start_live_job(source_name.clone());
+    apply_live_transcription_started(controller, &source_name);
 
     let progress_controller = controller.transcription;
     match transcribe_live_recording(
@@ -425,23 +430,45 @@ async fn run_live_transcription(
     )
     .await
     {
-        Ok(result) => {
-            controller.transcription.complete_job(result);
-            controller.error_message.set(None);
-            controller.feedback_message.set(Some(format!(
-                "Live transcript ready for review from {source_name}."
-            )));
-        }
-        Err(error) => {
-            controller
-                .transcription
-                .fail_job(InputType::Live, Some(source_name), error.clone());
-            controller.feedback_message.set(None);
-            controller
-                .error_message
-                .set(Some(format!("Live transcription failed: {error}")));
-        }
+        Ok(result) => apply_live_transcription_succeeded(controller, &source_name, result),
+        Err(error) => apply_live_transcription_failed(controller, &source_name, &error),
     }
+}
+
+fn apply_live_transcription_started(controller: LiveRecordingController, source_name: &str) {
+    controller.error_message.set(None);
+    controller.feedback_message.set(None);
+    controller
+        .transcription
+        .start_live_job(source_name.to_string());
+}
+
+fn apply_live_transcription_succeeded(
+    controller: LiveRecordingController,
+    source_name: &str,
+    result: TranscriptResult,
+) {
+    controller.transcription.complete_job(result);
+    controller.error_message.set(None);
+    controller.feedback_message.set(Some(format!(
+        "Live transcript ready for review from {source_name}."
+    )));
+}
+
+fn apply_live_transcription_failed(
+    controller: LiveRecordingController,
+    source_name: &str,
+    error: &str,
+) {
+    controller.transcription.fail_job(
+        InputType::Live,
+        Some(source_name.to_string()),
+        error.to_string(),
+    );
+    controller.feedback_message.set(None);
+    controller
+        .error_message
+        .set(Some(format!("Live transcription failed: {error}")));
 }
 
 fn live_transcription_source_name(result: &LiveRecordingResult) -> String {
@@ -460,6 +487,15 @@ fn live_transcription_source_name(result: &LiveRecordingResult) -> String {
     }
 
     "Live recording".to_string()
+}
+
+fn live_recording_summary(result: &LiveRecordingResult) -> LiveRecordingSummary {
+    LiveRecordingSummary {
+        input_device_label: live_transcription_source_name(result),
+        sample_rate_hz: result.sample_rate_hz,
+        channels: result.channels,
+        duration_ms: result.duration_ms,
+    }
 }
 
 fn apply_stop_ui_transition(controller: LiveRecordingController, transition: &StopUiTransition) {
@@ -498,6 +534,7 @@ fn now_ms() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tauri_api::{TranscriptSegment, TranscriptionJobState, TranscriptionSource};
 
     #[test]
     fn push_to_talk_press_starts_recording() {
@@ -660,11 +697,119 @@ mod tests {
             Some("Capture stopped. Temporary WAV saved from Desk Mic (00:05, 48000 Hz, 2 ch).")
         );
         assert_eq!(
-            transition
-                .last_result
-                .as_ref()
-                .map(|result| result.file_path.as_str()),
-            Some("/tmp/capture.wav")
+            transition.last_result.as_ref(),
+            Some(&LiveRecordingSummary {
+                input_device_label: "Desk Mic".to_string(),
+                sample_rate_hz: 48_000,
+                channels: 2,
+                duration_ms: 5_200,
+            })
+        );
+    }
+
+    #[test]
+    fn recording_to_transcribing_to_done_leaves_live_banner_idle_and_review_state_consistent() {
+        let transcription = TranscriptionController::new();
+        let controller = LiveRecordingController::new(transcription);
+        controller.status.set(recording_status("Desk Mic"));
+        controller
+            .recording_started_at_ms
+            .set(Some(now_ms() - 2_000.0));
+
+        let capture_result = sample_capture_result();
+        let transition = stop_ui_transition(Ok(capture_result));
+        apply_stop_ui_transition(controller, &transition);
+        apply_live_transcription_started(controller, "Desk Mic");
+
+        assert_eq!(controller.status.get().state, LiveRecordingState::Idle);
+        assert_eq!(controller.recording_started_at_ms.get(), None);
+        assert_eq!(controller.feedback_message.get(), None);
+        assert_eq!(controller.error_message.get(), None);
+        assert!(controller.transcription.is_transcribing.get());
+        assert_eq!(
+            controller.transcription.job_status.get(),
+            crate::tauri_api::TranscriptionJobStatus {
+                state: TranscriptionJobState::Running,
+                input_type: InputType::Live,
+                source_name: Some("Desk Mic".to_string()),
+                message: Some("Transcribing Desk Mic".to_string()),
+            }
+        );
+
+        let result = sample_transcript_result("Desk Mic", "final transcript");
+        apply_live_transcription_succeeded(controller, "Desk Mic", result.clone());
+
+        assert_eq!(controller.status.get().state, LiveRecordingState::Idle);
+        assert!(!controller.transcription.is_transcribing.get());
+        assert_eq!(controller.error_message.get(), None);
+        assert_eq!(
+            controller.feedback_message.get().as_deref(),
+            Some("Live transcript ready for review from Desk Mic.")
+        );
+        assert_eq!(
+            controller.transcription.transcript.get(),
+            Some(result.clone())
+        );
+        assert_eq!(
+            controller.transcription.job_status.get(),
+            crate::tauri_api::TranscriptionJobStatus {
+                state: TranscriptionJobState::Succeeded,
+                input_type: InputType::Live,
+                source_name: Some("Desk Mic".to_string()),
+                message: Some("Transcript ready for review.".to_string()),
+            }
+        );
+        assert_eq!(
+            controller.last_result.get(),
+            Some(LiveRecordingSummary {
+                input_device_label: "Desk Mic".to_string(),
+                sample_rate_hz: 48_000,
+                channels: 2,
+                duration_ms: 5_200,
+            })
+        );
+    }
+
+    #[test]
+    fn recording_to_transcribing_to_failed_leaves_live_banner_idle_and_not_recording() {
+        let transcription = TranscriptionController::new();
+        let controller = LiveRecordingController::new(transcription);
+        controller.status.set(recording_status("Desk Mic"));
+        controller
+            .recording_started_at_ms
+            .set(Some(now_ms() - 2_000.0));
+
+        let transition = stop_ui_transition(Ok(sample_capture_result()));
+        apply_stop_ui_transition(controller, &transition);
+        apply_live_transcription_started(controller, "Desk Mic");
+        apply_live_transcription_failed(controller, "Desk Mic", "provider mismatch");
+
+        assert_eq!(controller.status.get().state, LiveRecordingState::Idle);
+        assert_eq!(controller.recording_started_at_ms.get(), None);
+        assert!(!controller.transcription.is_transcribing.get());
+        assert_eq!(controller.feedback_message.get(), None);
+        assert_eq!(
+            controller.error_message.get().as_deref(),
+            Some("Live transcription failed: provider mismatch")
+        );
+        assert_eq!(controller.transcription.transcript.get(), None);
+        assert_eq!(
+            controller.transcription.job_status.get(),
+            crate::tauri_api::TranscriptionJobStatus {
+                state: TranscriptionJobState::Failed,
+                input_type: InputType::Live,
+                source_name: Some("Desk Mic".to_string()),
+                message: Some("provider mismatch".to_string()),
+            }
+        );
+        assert_eq!(
+            controller.last_result.get(),
+            Some(LiveRecordingSummary {
+                input_device_label: "Desk Mic".to_string(),
+                sample_rate_hz: 48_000,
+                channels: 2,
+                duration_ms: 5_200,
+            })
         );
     }
 
@@ -703,5 +848,48 @@ mod tests {
             duration_ms: 5_200,
         });
         assert_eq!(fallback_name, "Live recording");
+    }
+
+    fn recording_status(input_device_label: &str) -> LiveRecordingStatus {
+        LiveRecordingStatus {
+            state: LiveRecordingState::Recording,
+            input_device_id: Some("mic-1".to_string()),
+            input_device_label: Some(input_device_label.to_string()),
+            output_file_path: Some("/tmp/capture.wav".to_string()),
+            sample_rate_hz: Some(48_000),
+            channels: Some(2),
+            duration_ms: Some(5_200),
+            message: None,
+        }
+    }
+
+    fn sample_capture_result() -> LiveRecordingResult {
+        LiveRecordingResult {
+            file_path: "/tmp/capture.wav".to_string(),
+            input_device_id: Some("mic-1".to_string()),
+            input_device_label: "Desk Mic".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            duration_ms: 5_200,
+        }
+    }
+
+    fn sample_transcript_result(source_name: &str, text: &str) -> TranscriptResult {
+        TranscriptResult {
+            text: text.to_string(),
+            segments: vec![TranscriptSegment {
+                start_ms: 0,
+                end_ms: 1_200,
+                text: text.to_string(),
+            }],
+            source: TranscriptionSource {
+                provider: "whisper".to_string(),
+                model_id: "whisper-base".to_string(),
+                input_type: InputType::Live,
+                source_name: Some(source_name.to_string()),
+                duration_ms: Some(5_200),
+            },
+            post_processed_text: None,
+        }
     }
 }
