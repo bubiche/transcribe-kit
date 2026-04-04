@@ -1,5 +1,6 @@
 mod audio;
 mod commands;
+mod engine;
 mod hotkeys;
 mod input_devices;
 mod live_recording;
@@ -7,8 +8,9 @@ mod models;
 mod providers;
 mod recording_tray;
 mod settings;
+mod transcription;
 
-use commands::LocalEngineState;
+use engine::LocalEngineState;
 use hotkeys::HotkeyManagerState;
 use live_recording::LiveRecordingManagerState;
 use settings::SettingsStore;
@@ -55,7 +57,7 @@ pub fn run() {
             if let Err(error) = recording_tray::initialize(app.handle()) {
                 eprintln!("Failed to initialize tray icon: {error}");
             }
-            commands::preload_saved_local_model(
+            engine::preload_saved_local_model(
                 preload_engine_state.clone(),
                 preload_settings_store.clone(),
             );
