@@ -4,7 +4,7 @@ use leptos::task::spawn_local;
 use crate::tauri_api::{
     delete_model, ensure_model_downloaded, get_settings, list_api_models, list_input_devices,
     list_local_models, preload_local_model, save_settings, ApiModelDescriptor, AppSettings,
-    AudioInputDeviceDescriptor, HotkeyMode, LocalModelDescriptor, ProviderMode,
+    AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile, LocalModelDescriptor, ProviderMode,
     SaveSettingsRequest,
 };
 
@@ -13,6 +13,7 @@ pub struct SettingsFormState {
     pub provider_mode: RwSignal<ProviderMode>,
     pub local_model_id: RwSignal<String>,
     pub selected_input_device_id: RwSignal<Option<String>>,
+    pub live_capture_profile: RwSignal<LiveCaptureProfile>,
     pub hotkey_mode: RwSignal<HotkeyMode>,
     pub hotkey_shortcut: RwSignal<String>,
     pub api_model_id: RwSignal<String>,
@@ -29,6 +30,7 @@ impl SettingsFormState {
             provider_mode: RwSignal::new(ProviderMode::Local),
             local_model_id: RwSignal::new("whisper-base".to_string()),
             selected_input_device_id: RwSignal::new(None),
+            live_capture_profile: RwSignal::new(LiveCaptureProfile::default()),
             hotkey_mode: RwSignal::new(HotkeyMode::PushToTalk),
             hotkey_shortcut: RwSignal::new("CmdOrCtrl+Shift+T".to_string()),
             api_model_id: RwSignal::new("gpt-4o-mini-transcribe".to_string()),
@@ -45,6 +47,7 @@ impl SettingsFormState {
         self.local_model_id.set(settings.local_model_id);
         self.selected_input_device_id
             .set(settings.selected_input_device_id);
+        self.live_capture_profile.set(settings.live_capture_profile);
         self.hotkey_mode.set(settings.hotkey_mode);
         self.hotkey_shortcut.set(settings.hotkey_shortcut);
         self.api_model_id.set(settings.api_model_id);
@@ -61,6 +64,7 @@ impl SettingsFormState {
             provider_mode: self.provider_mode.get(),
             local_model_id: self.local_model_id.get(),
             selected_input_device_id: self.selected_input_device_id.get(),
+            live_capture_profile: self.live_capture_profile.get(),
             hotkey_mode: self.hotkey_mode.get(),
             hotkey_shortcut: self.hotkey_shortcut.get(),
             api_model_id: self.api_model_id.get(),

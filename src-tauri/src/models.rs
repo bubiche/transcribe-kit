@@ -26,11 +26,25 @@ impl Default for HotkeyMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LiveCaptureProfile {
+    MicrophoneOnly,
+    MeetingMix,
+}
+
+impl Default for LiveCaptureProfile {
+    fn default() -> Self {
+        Self::MicrophoneOnly
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
     pub provider_mode: ProviderMode,
     pub local_model_id: String,
     pub selected_input_device_id: Option<String>,
+    pub live_capture_profile: LiveCaptureProfile,
     pub hotkey_mode: HotkeyMode,
     pub hotkey_shortcut: String,
     pub api_model_id: String,
@@ -46,6 +60,7 @@ impl Default for AppSettings {
             provider_mode: ProviderMode::Local,
             local_model_id: "whisper-base".to_string(),
             selected_input_device_id: None,
+            live_capture_profile: LiveCaptureProfile::default(),
             hotkey_mode: HotkeyMode::PushToTalk,
             hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
             api_model_id: "gpt-4o-mini-transcribe".to_string(),
@@ -62,6 +77,7 @@ pub struct SaveSettingsRequest {
     pub provider_mode: ProviderMode,
     pub local_model_id: String,
     pub selected_input_device_id: Option<String>,
+    pub live_capture_profile: LiveCaptureProfile,
     pub hotkey_mode: HotkeyMode,
     pub hotkey_shortcut: String,
     pub api_model_id: String,

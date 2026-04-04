@@ -4,7 +4,7 @@ use crate::models::AudioInputDeviceDescriptor;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InputDeviceError {
-    #[error("Transcribe Kit could not enumerate microphone devices: {0}")]
+    #[error("Transcribe Kit could not enumerate audio input devices: {0}")]
     EnumerateDevices(#[source] cpal::DevicesError),
 }
 
@@ -25,7 +25,7 @@ pub fn list_input_devices() -> Result<Vec<AudioInputDeviceDescriptor>, InputDevi
             let label = description
                 .as_ref()
                 .map(|description| description.name().to_string())
-                .unwrap_or_else(|| format!("Microphone {}", &device_id[..8.min(device_id.len())]));
+                .unwrap_or_else(|| format!("Audio input {}", &device_id[..8.min(device_id.len())]));
 
             Some(AudioInputDeviceDescriptor {
                 id: device_id.clone(),

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     hotkeys,
-    models::{AppSettings, HotkeyMode, ProviderMode, SaveSettingsRequest},
+    models::{AppSettings, HotkeyMode, LiveCaptureProfile, ProviderMode, SaveSettingsRequest},
     providers::api_openai_compatible::ApiCredentials,
 };
 
@@ -40,6 +40,8 @@ struct StoredSettings {
     provider_mode: ProviderMode,
     local_model_id: String,
     selected_input_device_id: Option<String>,
+    #[serde(default)]
+    live_capture_profile: LiveCaptureProfile,
     #[serde(default = "default_hotkey_mode")]
     pub(crate) hotkey_mode: HotkeyMode,
     #[serde(default = "default_hotkey_shortcut")]
@@ -74,6 +76,7 @@ impl Default for StoredSettings {
             provider_mode: defaults.provider_mode,
             local_model_id: defaults.local_model_id,
             selected_input_device_id: defaults.selected_input_device_id,
+            live_capture_profile: defaults.live_capture_profile,
             hotkey_mode: defaults.hotkey_mode,
             hotkey_shortcut: defaults.hotkey_shortcut,
             api_model_id: defaults.api_model_id,
@@ -106,6 +109,7 @@ impl SettingsStore {
             provider_mode: stored.provider_mode,
             local_model_id: stored.local_model_id,
             selected_input_device_id: stored.selected_input_device_id,
+            live_capture_profile: stored.live_capture_profile,
             hotkey_mode: stored.hotkey_mode,
             hotkey_shortcut: stored.hotkey_shortcut,
             api_model_id: stored.api_model_id,
@@ -131,6 +135,7 @@ impl SettingsStore {
             selected_input_device_id: normalize_input_device_id(
                 request.selected_input_device_id.as_deref(),
             ),
+            live_capture_profile: request.live_capture_profile,
             hotkey_mode: request.hotkey_mode,
             hotkey_shortcut: hotkeys::validate_shortcut(&request.hotkey_shortcut)
                 .map_err(SettingsError::Validation)?,
@@ -290,7 +295,7 @@ fn validate_settings(
             .any(|device_id| device_id == &selected_input_device_id)
         {
             return Err(SettingsError::Validation(
-                "Select an available microphone or switch back to System default.".to_string(),
+                "Select an available audio input or switch back to System default.".to_string(),
             ));
         }
     }
@@ -342,6 +347,10 @@ mod tests {
         assert_eq!(settings.provider_mode, ProviderMode::Local);
         assert_eq!(settings.local_model_id, "whisper-base");
         assert_eq!(settings.selected_input_device_id, None);
+        assert_eq!(
+            settings.live_capture_profile,
+            LiveCaptureProfile::MicrophoneOnly
+        );
         assert_eq!(settings.hotkey_mode, HotkeyMode::PushToTalk);
         assert_eq!(settings.hotkey_shortcut, "CmdOrCtrl+Shift+T");
         assert_eq!(settings.api_model_id, "gpt-4o-mini-transcribe");
@@ -358,6 +367,7 @@ mod tests {
                 provider_mode: ProviderMode::Local,
                 local_model_id: "unknown".to_string(),
                 selected_input_device_id: None,
+                live_capture_profile: LiveCaptureProfile::default(),
                 hotkey_mode: HotkeyMode::PushToTalk,
                 hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),
@@ -383,6 +393,7 @@ mod tests {
                 provider_mode: ProviderMode::Api,
                 local_model_id: "whisper-base".to_string(),
                 selected_input_device_id: None,
+                live_capture_profile: LiveCaptureProfile::default(),
                 hotkey_mode: HotkeyMode::PushToTalk,
                 hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
                 api_model_id: "custom".to_string(),
@@ -416,6 +427,7 @@ mod tests {
                 provider_mode: ProviderMode::Local,
                 local_model_id: "whisper-base".to_string(),
                 selected_input_device_id: None,
+                live_capture_profile: LiveCaptureProfile::default(),
                 hotkey_mode: HotkeyMode::PushToTalk,
                 hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),
@@ -436,6 +448,7 @@ mod tests {
                 provider_mode: ProviderMode::Local,
                 local_model_id: "whisper-base".to_string(),
                 selected_input_device_id: Some("missing-device".to_string()),
+                live_capture_profile: LiveCaptureProfile::default(),
                 hotkey_mode: HotkeyMode::PushToTalk,
                 hotkey_shortcut: "CmdOrCtrl+Shift+T".to_string(),
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),
@@ -461,6 +474,7 @@ mod tests {
                 provider_mode: ProviderMode::Local,
                 local_model_id: "whisper-base".to_string(),
                 selected_input_device_id: None,
+                live_capture_profile: LiveCaptureProfile::default(),
                 hotkey_mode: HotkeyMode::PushToTalk,
                 hotkey_shortcut: "T".to_string(),
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),

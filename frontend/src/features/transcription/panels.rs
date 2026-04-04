@@ -339,13 +339,13 @@ fn ListeningIndicator(
                 </span>
             </div>
             <div class="mini-status">
-                <span class="mini-chip">{move || format!("Mic: {}", live_recording_label.get())}</span>
+                <span class="mini-chip">{move || format!("Input: {}", live_recording_label.get())}</span>
                 <span class="mini-chip">
                     {move || format!("Elapsed: {}", format_duration(live_recording_elapsed_ms.get()))}
                 </span>
             </div>
             <p class="body-copy">
-                "Your microphone is active. Release the hotkey or press it again to stop and generate the transcript."
+                "Your audio input is active. Release the hotkey or press it again to stop and generate the transcript."
             </p>
         </div>
     }

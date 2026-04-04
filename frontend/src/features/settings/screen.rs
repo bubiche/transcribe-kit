@@ -3,7 +3,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
 use crate::live_recording::LiveRecordingController;
-use crate::tauri_api::{AudioInputDeviceDescriptor, HotkeyMode, ProviderMode};
+use crate::tauri_api::{AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile, ProviderMode};
 
 use super::state::{DownloadState, SettingsFeatureState};
 
@@ -32,14 +32,14 @@ pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView 
                 .into_iter()
                 .find(|device| device.id == selected_id)
                 .map(|device| device.label)
-                .unwrap_or_else(|| "Previously selected microphone unavailable".to_string()),
+                .unwrap_or_else(|| "Previously selected input unavailable".to_string()),
             None => state
                 .input_devices
                 .get()
                 .into_iter()
                 .find(|device| device.is_default)
                 .map(|device| format!("System default ({})", device.label))
-                .unwrap_or_else(|| "System default microphone".to_string()),
+                .unwrap_or_else(|| "System default input".to_string()),
         });
     let selected_hotkey_label = Signal::derive(move || {
         let mode_label = match state.form.hotkey_mode.get() {
@@ -81,9 +81,13 @@ pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView 
                         custom_api_selected=custom_api_selected
                     />
                     <div class="settings-sidebar">
+                        <CaptureProfileField
+                            live_capture_profile=state.form.live_capture_profile
+                        />
                         <InputDeviceField
                             selected_input_device_id=state.form.selected_input_device_id
                             input_devices=state.input_devices
+                            live_capture_profile=state.form.live_capture_profile
                         />
                         <HotkeySettingsCard state=state />
                         <SettingsActionsCard
@@ -104,7 +108,7 @@ fn SettingsHero() -> impl IntoView {
         <div class="hero">
             <h2>"Provider and model configuration"</h2>
             <p>
-                "Choose your transcription provider, save a preferred microphone, and configure the global recording hotkey while keeping API keys out of the plain-text config file."
+                "Choose your transcription provider, capture profile, audio input, and global recording hotkey while keeping API keys out of the plain-text config file."
             </p>
         </div>
     }
@@ -153,7 +157,7 @@ fn StatusCards(
                 </p>
             </div>
             <div class="status-card">
-                <p class="status-label">"Microphone"</p>
+                <p class="status-label">"Audio input"</p>
                 <p class="status-value">{move || selected_input_device_label.get()}</p>
             </div>
             <div class="status-card">
@@ -215,9 +219,57 @@ fn ProviderSettingsCard(
 }
 
 #[component]
+fn CaptureProfileField(live_capture_profile: RwSignal<LiveCaptureProfile>) -> impl IntoView {
+    let profile_hint = Signal::derive(move || {
+        match live_capture_profile.get() {
+        LiveCaptureProfile::MicrophoneOnly => {
+            "Records from your selected audio input. Best for voice notes and dictation."
+                .to_string()
+        }
+        LiveCaptureProfile::MeetingMix => {
+            "Records from an input that already contains both your voice and remote call audio, such as a loopback, monitor, or virtual cable input."
+                .to_string()
+        }
+    }
+    });
+
+    view! {
+        <section class="section settings-card">
+            <p class="tag">"Capture"</p>
+            <h4>"Capture profile"</h4>
+            <p class="body-copy">
+                "Choose whether you are recording just your own voice or capturing a full meeting."
+            </p>
+
+            <label class="field">
+                <span class="field-label">"Profile"</span>
+                <select
+                    prop:value=move || match live_capture_profile.get() {
+                        LiveCaptureProfile::MicrophoneOnly => "microphone-only",
+                        LiveCaptureProfile::MeetingMix => "meeting-mix",
+                    }
+                    on:change=move |event| {
+                        match event_target_value(&event).as_str() {
+                            "meeting-mix" => live_capture_profile.set(LiveCaptureProfile::MeetingMix),
+                            _ => live_capture_profile.set(LiveCaptureProfile::MicrophoneOnly),
+                        }
+                    }
+                >
+                    <option value="microphone-only">"Microphone only"</option>
+                    <option value="meeting-mix">"Meeting mix"</option>
+                </select>
+            </label>
+
+            <p class="field-hint">{move || profile_hint.get()}</p>
+        </section>
+    }
+}
+
+#[component]
 fn InputDeviceField(
     selected_input_device_id: RwSignal<Option<String>>,
     input_devices: RwSignal<Vec<AudioInputDeviceDescriptor>>,
+    live_capture_profile: RwSignal<LiveCaptureProfile>,
 ) -> impl IntoView {
     let selected_input_device_missing = Signal::derive(move || {
         let Some(selected_id) = selected_input_device_id.get() else {
@@ -239,25 +291,39 @@ fn InputDeviceField(
                 .find(|device| device.id == selected_id)
                 .map(|device| describe_input_device(&device))
                 .unwrap_or_else(|| {
-                    "The saved microphone is no longer available on this machine.".to_string()
+                    "The saved audio input is no longer available on this machine.".to_string()
                 }),
             None => devices
                 .into_iter()
                 .find(|device| device.is_default)
                 .map(|device| format!("System default is currently {}.", device.label))
                 .unwrap_or_else(|| {
-                    "System default will follow the OS microphone choice whenever live capture starts."
+                    "System default will follow the OS audio input choice whenever live capture starts."
                         .to_string()
                 }),
         }
     });
 
+    let meeting_mix_mic_warning = Signal::derive(move || {
+        if !matches!(live_capture_profile.get(), LiveCaptureProfile::MeetingMix) {
+            return false;
+        }
+        let devices = input_devices.get();
+        let effective_device = match selected_input_device_id.get() {
+            Some(selected_id) => devices.iter().find(|d| d.id == selected_id),
+            None => devices.iter().find(|d| d.is_default),
+        };
+        effective_device
+            .map(|device| !looks_like_loopback_or_monitor(&device.label))
+            .unwrap_or(true)
+    });
+
     let device_count_label = Signal::derive(move || {
         let count = input_devices.get().len();
         match count {
-            0 => "No microphones detected".to_string(),
-            1 => "1 microphone detected".to_string(),
-            _ => format!("{count} microphones detected"),
+            0 => "No audio inputs detected".to_string(),
+            1 => "1 audio input detected".to_string(),
+            _ => format!("{count} audio inputs detected"),
         }
     });
 
@@ -266,16 +332,16 @@ fn InputDeviceField(
             <div class="input-device-panel-header">
                 <div class="stack">
                     <p class="tag">"Audio input"</p>
-                    <h4>"Choose the microphone for live recording"</h4>
+                    <h4>"Choose the audio input for live capture"</h4>
                     <p class="body-copy">
-                        "This dropdown controls which microphone the live capture pipeline will use when recording starts."
+                        "This dropdown controls which audio input the live capture pipeline will use when recording starts."
                     </p>
                 </div>
                 <span class="mini-chip">{move || device_count_label.get()}</span>
             </div>
 
             <label class="field">
-                <span class="field-label">"Microphone dropdown"</span>
+                <span class="field-label">"Audio input"</span>
                 <select
                     class="input-device-select"
                     prop:value=move || selected_input_device_id.get().unwrap_or_default()
@@ -287,10 +353,10 @@ fn InputDeviceField(
                 >
                     <Show when=move || selected_input_device_missing.get()>
                         <option value=move || selected_input_device_id.get().unwrap_or_default()>
-                            "Previously selected microphone (currently unavailable)"
+                            "Previously selected input (currently unavailable)"
                         </option>
                     </Show>
-                    <option value="">"System default microphone"</option>
+                    <option value="">"System default input"</option>
                     <For
                         each=move || input_devices.get()
                         key=|device| device.id.clone()
@@ -311,6 +377,12 @@ fn InputDeviceField(
 
             <p class="field-hint">{move || selected_device_hint.get()}</p>
 
+            <Show when=move || meeting_mix_mic_warning.get()>
+                <p class="field-hint field-warning">
+                    "Meeting capture may be incomplete: the selected input looks like a standard microphone rather than a mixed input. The transcript may mostly contain your own voice."
+                </p>
+            </Show>
+
             <Show when=move || selected_input_device_missing.get()>
                 <p class="field-hint field-warning">
                     "Choose a different device or switch to System default before saving."
@@ -319,7 +391,7 @@ fn InputDeviceField(
 
             <Show when=move || input_devices.get().is_empty()>
                 <p class="field-hint">
-                    "No microphones were detected right now. You can still keep the selection on System default."
+                    "No audio inputs were detected right now. You can still keep the selection on System default."
                 </p>
             </Show>
         </section>
@@ -527,7 +599,7 @@ fn SettingsActionsCard(
             <p class="tag">"Apply"</p>
             <h3>"Save configuration"</h3>
             <p class="body-copy">
-                "Provider, model, microphone, and hotkey preferences are stored together so the app opens in the same state next time."
+                "Provider, model, capture profile, audio input, and hotkey preferences are stored together so the app opens in the same state next time."
             </p>
 
             <button class="primary-button" on:click=on_save disabled=move || is_saving.get()>
@@ -716,6 +788,19 @@ fn format_bytes(bytes: u64) -> String {
     }
     let gb = mb / 1024.0;
     format!("{gb:.2} GB")
+}
+
+fn looks_like_loopback_or_monitor(label: &str) -> bool {
+    let lower = label.to_lowercase();
+    lower.contains("loopback")
+        || lower.contains("monitor")
+        || lower.contains("stereo mix")
+        || lower.contains("virtual")
+        || lower.contains("cable")
+        || lower.contains("blackhole")
+        || lower.contains("soundflower")
+        || lower.contains("vb-audio")
+        || lower.contains("aggregate")
 }
 
 fn describe_input_device(device: &AudioInputDeviceDescriptor) -> String {

@@ -59,7 +59,7 @@ impl LiveRecordingController {
     pub fn new(transcription: TranscriptionController) -> Self {
         Self {
             status: RwSignal::new(idle_status()),
-            armed_input_label: RwSignal::new("System default microphone".to_string()),
+            armed_input_label: RwSignal::new("System default input".to_string()),
             recording_started_at_ms: RwSignal::new(None),
             feedback_message: RwSignal::new(None),
             error_message: RwSignal::new(None),
@@ -179,7 +179,7 @@ impl LiveRecordingController {
                 }
                 (_, Err(error)) => {
                     self.device_context_error.set(Some(format!(
-                        "Available microphones could not be refreshed: {error}"
+                        "Available audio inputs could not be refreshed: {error}"
                     )));
                 }
             }
@@ -310,12 +310,12 @@ fn resolve_armed_input_label(
             .iter()
             .find(|device| device.id == selected_id)
             .map(|device| device.label.clone())
-            .unwrap_or_else(|| "Previously selected microphone unavailable".to_string()),
+            .unwrap_or_else(|| "Previously selected input unavailable".to_string()),
         None => devices
             .iter()
             .find(|device| device.is_default)
             .map(|device| format!("System default ({})", device.label))
-            .unwrap_or_else(|| "System default microphone".to_string()),
+            .unwrap_or_else(|| "System default input".to_string()),
     }
 }
 

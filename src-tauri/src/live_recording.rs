@@ -29,23 +29,23 @@ pub enum LiveRecordingError {
     AlreadyRecording,
     #[error("No live recording is in progress right now.")]
     NotRecording,
-    #[error("Transcribe Kit could not find a microphone to start recording. Connect a microphone or choose a different input device in Settings.{0}")]
+    #[error("Transcribe Kit could not find an audio input to start recording. Connect an audio input or choose a different device in Settings.{0}")]
     NoInputDevice(&'static str),
-    #[error("Transcribe Kit could not find the selected microphone anymore. Re-open Settings and choose an available input device.")]
+    #[error("Transcribe Kit could not find the selected audio input anymore. Re-open Settings and choose an available input device.")]
     SelectedDeviceUnavailable,
-    #[error("Transcribe Kit could not reach the audio backend for the selected microphone.")]
+    #[error("Transcribe Kit could not reach the audio backend for the selected input device.")]
     HostUnavailable,
-    #[error("Transcribe Kit could not determine a usable capture format for the selected microphone: {0}")]
+    #[error("Transcribe Kit could not determine a usable capture format for the selected input device: {0}")]
     DefaultConfig(String),
     #[error(
-        "Transcribe Kit does not support recording from the microphone sample format \"{0}\"."
+        "Transcribe Kit does not support recording from this input device sample format: \"{0}\"."
     )]
     UnsupportedSampleFormat(String),
     #[error("Transcribe Kit could not create the temporary WAV recording: {0}")]
     CreateWav(String),
-    #[error("Transcribe Kit could not start the microphone stream: {0}")]
+    #[error("Transcribe Kit could not start the audio input stream: {0}")]
     BuildStream(String),
-    #[error("Transcribe Kit could not begin recording from the microphone: {0}")]
+    #[error("Transcribe Kit could not begin recording from the audio input: {0}")]
     PlayStream(String),
     #[error("Transcribe Kit could not finish writing the temporary WAV recording: {0}")]
     FinalizeWav(String),
@@ -311,13 +311,13 @@ fn device_label(device: &Device, fallback_id: Option<&str>) -> String {
         .unwrap_or_else(|_| {
             fallback_id
                 .map(short_device_label)
-                .unwrap_or_else(|| "System microphone".to_string())
+                .unwrap_or_else(|| "System audio input".to_string())
         })
 }
 
 fn short_device_label(device_id: &str) -> String {
     let suffix = device_id.rsplit(':').next().unwrap_or(device_id);
-    format!("Microphone {}", &suffix[..8.min(suffix.len())])
+    format!("Audio input {}", &suffix[..8.min(suffix.len())])
 }
 
 fn next_recording_path() -> PathBuf {
@@ -550,7 +550,7 @@ fn capture_chunk<T>(
         let mut guard = runtime_error.lock().unwrap();
         if guard.is_none() {
             *guard = Some(format!(
-                "Transcribe Kit stopped receiving microphone audio data: {error}"
+                "Transcribe Kit stopped receiving audio input data: {error}"
             ));
         }
     }
@@ -594,7 +594,7 @@ fn no_input_device_hint() -> &'static str {
 fn with_platform_hint(message: String) -> String {
     #[cfg(target_os = "linux")]
     {
-        format!("{message} If this is Linux, also check whether PipeWire or PulseAudio is running and whether another app has locked the microphone.")
+        format!("{message} If this is Linux, also check whether PipeWire or PulseAudio is running and whether another app has locked the audio input.")
     }
 
     #[cfg(target_os = "macos")]
@@ -604,7 +604,7 @@ fn with_platform_hint(message: String) -> String {
 
     #[cfg(target_os = "windows")]
     {
-        format!("{message} If this is Windows, check whether another app already has the microphone open.")
+        format!("{message} If this is Windows, check whether another app already has the audio input open.")
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
