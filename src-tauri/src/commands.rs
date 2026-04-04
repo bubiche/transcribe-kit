@@ -8,7 +8,7 @@ use tauri::State;
 use crate::{
     audio, hotkeys, input_devices, live_recording,
     models::{
-        ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType,
+        ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType, LiveCaptureProfile,
         LiveRecordingResult, LiveRecordingStatus, LocalModelDescriptor, ModelDownloadProgress,
         ModelStatus, ProviderMode, SaveSettingsRequest, StartFileTranscriptionRequest,
         TranscribeLiveRecordingRequest, TranscriptResult, TranscriptionStreamEvent,
@@ -41,6 +41,7 @@ impl LocalEngineState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocalTranscriptionMetadata {
     input_type: InputType,
+    live_capture_profile: Option<LiveCaptureProfile>,
     source_name: Option<String>,
     duration_ms: Option<u64>,
 }
@@ -241,6 +242,7 @@ pub async fn start_file_transcription(
         file_path,
         LocalTranscriptionMetadata {
             input_type: InputType::File,
+            live_capture_profile: None,
             source_name,
             duration_ms: None,
         },
@@ -267,6 +269,7 @@ pub async fn transcribe_live_recording(
                 file_path,
                 LocalTranscriptionMetadata {
                     input_type: InputType::Live,
+                    live_capture_profile: Some(request.live_capture_profile),
                     source_name: Some(live_source_name(
                         &request.input_device_label,
                         request.input_device_id.as_deref(),
@@ -442,6 +445,7 @@ fn apply_transcription_metadata(
     decoded_duration_ms: Option<u64>,
 ) -> TranscriptResult {
     result.source.input_type = metadata.input_type;
+    result.source.live_capture_profile = metadata.live_capture_profile;
     result.source.source_name = metadata.source_name;
     result.source.duration_ms = metadata.duration_ms.or(decoded_duration_ms);
     result
@@ -481,7 +485,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use crate::models::{InputType, TranscriptResult, TranscriptionSource};
+    use crate::models::{InputType, LiveCaptureProfile, TranscriptResult, TranscriptionSource};
 
     #[test]
     fn live_source_name_prefers_trimmed_device_label() {
@@ -527,11 +531,12 @@ mod tests {
     }
 
     #[test]
-    fn apply_transcription_metadata_prefers_explicit_duration_and_source() {
+    fn apply_transcription_metadata_preserves_live_profile_and_explicit_metadata() {
         let result = apply_transcription_metadata(
             sample_transcript_result(),
             LocalTranscriptionMetadata {
                 input_type: InputType::Live,
+                live_capture_profile: Some(LiveCaptureProfile::MeetingMix),
                 source_name: Some("Desk Mic".to_string()),
                 duration_ms: Some(8_200),
             },
@@ -539,6 +544,10 @@ mod tests {
         );
 
         assert_eq!(result.source.input_type, InputType::Live);
+        assert_eq!(
+            result.source.live_capture_profile,
+            Some(LiveCaptureProfile::MeetingMix)
+        );
         assert_eq!(result.source.source_name.as_deref(), Some("Desk Mic"));
         assert_eq!(result.source.duration_ms, Some(8_200));
     }
@@ -549,6 +558,7 @@ mod tests {
             sample_transcript_result(),
             LocalTranscriptionMetadata {
                 input_type: InputType::File,
+                live_capture_profile: None,
                 source_name: Some("note.wav".to_string()),
                 duration_ms: None,
             },
@@ -556,6 +566,7 @@ mod tests {
         );
 
         assert_eq!(result.source.input_type, InputType::File);
+        assert_eq!(result.source.live_capture_profile, None);
         assert_eq!(result.source.source_name.as_deref(), Some("note.wav"));
         assert_eq!(result.source.duration_ms, Some(4_500));
     }
@@ -604,6 +615,7 @@ mod tests {
                 provider: "whisper".to_string(),
                 model_id: "whisper-base".to_string(),
                 input_type: InputType::File,
+                live_capture_profile: None,
                 source_name: None,
                 duration_ms: None,
             },

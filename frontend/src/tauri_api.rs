@@ -296,6 +296,8 @@ pub struct TranscribeLiveRecordingRequest {
     pub file_path: String,
     pub input_device_id: Option<String>,
     pub input_device_label: String,
+    #[serde(default)]
+    pub live_capture_profile: LiveCaptureProfile,
     pub duration_ms: u64,
 }
 
@@ -304,6 +306,8 @@ pub struct TranscriptionSource {
     pub provider: String,
     pub model_id: String,
     pub input_type: InputType,
+    #[serde(default)]
+    pub live_capture_profile: Option<LiveCaptureProfile>,
     pub source_name: Option<String>,
     pub duration_ms: Option<u64>,
 }

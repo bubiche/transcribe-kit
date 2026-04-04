@@ -15,7 +15,7 @@ use crate::live_recording::{
 };
 use crate::tauri_api::{
     listen_to_app_event, HotkeyActivityEvent, HotkeyActivityState, HotkeyMode, InputType,
-    LiveRecordingState,
+    LiveCaptureProfile, LiveRecordingState,
 };
 
 #[component]
@@ -158,12 +158,39 @@ fn should_navigate_to_live_transcript(
 }
 
 fn live_transcribing_detail_copy(
+    capture_profile: LiveCaptureProfile,
     feedback_message: Option<String>,
     job_message: Option<String>,
 ) -> String {
     feedback_message
         .or(job_message)
-        .unwrap_or_else(|| "Transcribing live recording...".to_string())
+        .unwrap_or_else(|| live_transcribing_fallback_copy(capture_profile))
+}
+
+fn armed_capture_state_label(capture_profile: LiveCaptureProfile) -> &'static str {
+    match capture_profile {
+        LiveCaptureProfile::MicrophoneOnly => "Armed for microphone capture",
+        LiveCaptureProfile::MeetingMix => "Armed for meeting capture",
+    }
+}
+
+fn live_capture_state_label(
+    capture_profile: LiveCaptureProfile,
+    is_transcribing: bool,
+) -> &'static str {
+    match (capture_profile, is_transcribing) {
+        (LiveCaptureProfile::MicrophoneOnly, false) => "Recording microphone capture",
+        (LiveCaptureProfile::MicrophoneOnly, true) => "Transcribing microphone capture",
+        (LiveCaptureProfile::MeetingMix, false) => "Recording meeting mix",
+        (LiveCaptureProfile::MeetingMix, true) => "Transcribing meeting capture",
+    }
+}
+
+fn live_transcribing_fallback_copy(capture_profile: LiveCaptureProfile) -> String {
+    match capture_profile {
+        LiveCaptureProfile::MicrophoneOnly => "Transcribing microphone capture...".to_string(),
+        LiveCaptureProfile::MeetingMix => "Transcribing meeting capture...".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -188,6 +215,7 @@ mod tests {
                 provider: "whisper".to_string(),
                 model_id: "whisper-base".to_string(),
                 input_type: InputType::Live,
+                live_capture_profile: Some(LiveCaptureProfile::MicrophoneOnly),
                 source_name: Some("Desk Mic".to_string()),
                 duration_ms: Some(1_000),
             },
@@ -212,6 +240,7 @@ mod tests {
     fn live_transcribing_detail_copy_prefers_feedback_over_progress_copy() {
         assert_eq!(
             live_transcribing_detail_copy(
+                LiveCaptureProfile::MeetingMix,
                 Some("Wait for the current transcription job to finish.".to_string()),
                 Some("Transcribing Desk Mic (42%)".to_string()),
             ),
@@ -222,12 +251,40 @@ mod tests {
     #[test]
     fn live_transcribing_detail_copy_falls_back_to_job_message_then_default() {
         assert_eq!(
-            live_transcribing_detail_copy(None, Some("Transcribing Desk Mic (42%)".to_string())),
+            live_transcribing_detail_copy(
+                LiveCaptureProfile::MeetingMix,
+                None,
+                Some("Transcribing Desk Mic (42%)".to_string()),
+            ),
             "Transcribing Desk Mic (42%)"
         );
         assert_eq!(
-            live_transcribing_detail_copy(None, None),
-            "Transcribing live recording..."
+            live_transcribing_detail_copy(LiveCaptureProfile::MeetingMix, None, None),
+            "Transcribing meeting capture..."
+        );
+    }
+
+    #[test]
+    fn capture_state_labels_reflect_selected_profile() {
+        assert_eq!(
+            armed_capture_state_label(LiveCaptureProfile::MicrophoneOnly),
+            "Armed for microphone capture"
+        );
+        assert_eq!(
+            armed_capture_state_label(LiveCaptureProfile::MeetingMix),
+            "Armed for meeting capture"
+        );
+        assert_eq!(
+            live_capture_state_label(LiveCaptureProfile::MicrophoneOnly, false),
+            "Recording microphone capture"
+        );
+        assert_eq!(
+            live_capture_state_label(LiveCaptureProfile::MeetingMix, false),
+            "Recording meeting mix"
+        );
+        assert_eq!(
+            live_capture_state_label(LiveCaptureProfile::MeetingMix, true),
+            "Transcribing meeting capture"
         );
     }
 }
@@ -306,17 +363,18 @@ fn LiveRecordingBanner(
     });
 
     let state_label = Signal::derive(move || {
+        let capture_profile = controller.armed_capture_profile.get();
         if matches!(controller.status.get().state, LiveRecordingState::Recording) {
-            "Recording".to_string()
+            live_capture_state_label(capture_profile, false).to_string()
         } else if is_live_transcribing.get() {
-            "Transcribing".to_string()
+            live_capture_state_label(capture_profile, true).to_string()
         } else if controller.error_message.get().is_some()
             || controller.load_error.get().is_some()
             || controller.device_context_error.get().is_some()
         {
             "Needs attention".to_string()
         } else if controller.is_ready.get() {
-            "Armed".to_string()
+            armed_capture_state_label(capture_profile).to_string()
         } else {
             "Loading".to_string()
         }
@@ -358,6 +416,7 @@ fn LiveRecordingBanner(
 
         if is_live_transcribing.get() {
             return live_transcribing_detail_copy(
+                controller.armed_capture_profile.get(),
                 controller.feedback_message.get(),
                 controller.transcription.job_status.get().message,
             );

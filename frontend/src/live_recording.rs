@@ -9,8 +9,8 @@ use crate::tauri_api::{
     get_live_recording_status, get_settings, list_input_devices, listen_to_app_event,
     start_live_transcription, stop_live_transcription, transcribe_live_recording, AppSettings,
     AudioInputDeviceDescriptor, HotkeyActivityEvent, HotkeyActivityState, HotkeyMode, InputType,
-    LiveRecordingResult, LiveRecordingState, LiveRecordingStatus, TranscribeLiveRecordingRequest,
-    TranscriptResult,
+    LiveCaptureProfile, LiveRecordingResult, LiveRecordingState, LiveRecordingStatus,
+    TranscribeLiveRecordingRequest, TranscriptResult,
 };
 
 pub const HOTKEY_ACTIVITY_EVENT_NAME: &str = "transcribe-kit://live-recording-hotkey";
@@ -20,6 +20,7 @@ pub const LIVE_RECORDING_STATUS_EVENT_NAME: &str = "transcribe-kit://live-record
 pub struct LiveRecordingController {
     pub status: RwSignal<LiveRecordingStatus>,
     pub armed_input_label: RwSignal<String>,
+    pub armed_capture_profile: RwSignal<LiveCaptureProfile>,
     pub recording_started_at_ms: RwSignal<Option<f64>>,
     pub feedback_message: RwSignal<Option<String>>,
     pub error_message: RwSignal<Option<String>>,
@@ -60,6 +61,7 @@ impl LiveRecordingController {
         Self {
             status: RwSignal::new(idle_status()),
             armed_input_label: RwSignal::new("System default input".to_string()),
+            armed_capture_profile: RwSignal::new(LiveCaptureProfile::default()),
             recording_started_at_ms: RwSignal::new(None),
             feedback_message: RwSignal::new(None),
             error_message: RwSignal::new(None),
@@ -158,6 +160,8 @@ impl LiveRecordingController {
 
             match (settings_result, devices_result) {
                 (Ok(settings), Ok(devices)) => {
+                    self.armed_capture_profile
+                        .set(settings.live_capture_profile);
                     self.armed_input_label
                         .set(resolve_armed_input_label(&settings, &devices));
                     self.device_context_error.set(None);
@@ -417,6 +421,7 @@ async fn run_live_transcription(
             file_path: capture_result.file_path.clone(),
             input_device_id: capture_result.input_device_id.clone(),
             input_device_label: capture_result.input_device_label.clone(),
+            live_capture_profile: controller.armed_capture_profile.get_untracked(),
             duration_ms: capture_result.duration_ms,
         },
         move |event| {
@@ -877,6 +882,7 @@ mod tests {
                 provider: "whisper".to_string(),
                 model_id: "whisper-base".to_string(),
                 input_type: InputType::Live,
+                live_capture_profile: Some(LiveCaptureProfile::MicrophoneOnly),
                 source_name: Some(source_name.to_string()),
                 duration_ms: Some(5_200),
             },

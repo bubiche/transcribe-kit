@@ -133,6 +133,7 @@ impl WhisperEngine {
                 provider: ENGINE_ID.to_string(),
                 model_id: self.model_id.clone(),
                 input_type: InputType::File,
+                live_capture_profile: None,
                 source_name: None,
                 duration_ms: None,
             },

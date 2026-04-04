@@ -377,6 +377,7 @@ mod tests {
                 provider: "whisper".to_string(),
                 model_id: "whisper-base".to_string(),
                 input_type,
+                live_capture_profile: None,
                 source_name: source_name.map(str::to_string),
                 duration_ms: Some(1_000),
             },

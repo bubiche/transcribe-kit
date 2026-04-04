@@ -6,7 +6,8 @@ use wasm_bindgen::JsCast;
 use crate::live_recording::format_duration;
 use crate::tauri_api::LiveRecordingState;
 use crate::tauri_api::{
-    InputType, TranscriptResult, TranscriptionJobState, TranscriptionJobStatus,
+    InputType, LiveCaptureProfile, TranscriptResult, TranscriptionJobState, TranscriptionJobStatus,
+    TranscriptionSource,
 };
 
 use super::controller::TranscriptionController;
@@ -465,11 +466,13 @@ fn render_transcript_result(result: TranscriptResult) -> impl IntoView {
         .duration_ms
         .map(format_duration_label)
         .unwrap_or_else(|| "Unknown duration".to_string());
-    let source_name = result
-        .source
-        .source_name
-        .clone()
-        .unwrap_or_else(|| source_name_fallback(result.source.input_type));
+    let source_name = primary_source_label(&result.source);
+    let input_label = supporting_input_label(&result.source);
+    let input_chip = if let Some(label) = input_label {
+        view! { <span class="mini-chip">{label}</span> }.into_any()
+    } else {
+        ().into_any()
+    };
     let provider = result.source.provider.clone();
     let model_id = result.source.model_id.clone();
     let text = result.text.clone();
@@ -504,6 +507,7 @@ fn render_transcript_result(result: TranscriptResult) -> impl IntoView {
         <div class="stack">
             <div class="mini-status">
                 <span class="mini-chip">{source_name}</span>
+                {input_chip}
                 <span class="mini-chip">{format!("Engine: {provider}")}</span>
                 <span class="mini-chip">{format!("Model: {model_id}")}</span>
                 <span class="mini-chip">{duration}</span>
@@ -526,10 +530,44 @@ fn draft_label(state: TranscriptionJobState, input_type: InputType) -> &'static 
     }
 }
 
-fn source_name_fallback(input_type: InputType) -> String {
-    match input_type {
-        InputType::File => "Imported file".to_string(),
-        InputType::Live => "Live recording".to_string(),
+fn primary_source_label(source: &TranscriptionSource) -> String {
+    match source.input_type {
+        InputType::File => source
+            .source_name
+            .clone()
+            .unwrap_or_else(|| source_name_fallback(InputType::File, None)),
+        InputType::Live => source_name_fallback(InputType::Live, source.live_capture_profile),
+    }
+}
+
+fn supporting_input_label(source: &TranscriptionSource) -> Option<String> {
+    if !matches!(source.input_type, InputType::Live) {
+        return None;
+    }
+
+    normalized_source_name(source.source_name.as_deref()).map(|label| format!("Input: {label}"))
+}
+
+fn normalized_source_name(source_name: Option<&str>) -> Option<String> {
+    source_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn source_name_fallback(
+    input_type: InputType,
+    live_capture_profile: Option<LiveCaptureProfile>,
+) -> String {
+    match (input_type, live_capture_profile) {
+        (InputType::File, _) => "Imported file".to_string(),
+        (InputType::Live, Some(LiveCaptureProfile::MicrophoneOnly)) => {
+            "Live microphone note".to_string()
+        }
+        (InputType::Live, Some(LiveCaptureProfile::MeetingMix)) => {
+            "Live meeting capture".to_string()
+        }
+        (InputType::Live, None) => "Live recording".to_string(),
     }
 }
 
@@ -563,8 +601,71 @@ mod tests {
 
     #[test]
     fn source_name_fallback_matches_input_type() {
-        assert_eq!(source_name_fallback(InputType::File), "Imported file");
-        assert_eq!(source_name_fallback(InputType::Live), "Live recording");
+        assert_eq!(source_name_fallback(InputType::File, None), "Imported file");
+        assert_eq!(
+            source_name_fallback(InputType::Live, None),
+            "Live recording"
+        );
+        assert_eq!(
+            source_name_fallback(InputType::Live, Some(LiveCaptureProfile::MicrophoneOnly),),
+            "Live microphone note"
+        );
+        assert_eq!(
+            source_name_fallback(InputType::Live, Some(LiveCaptureProfile::MeetingMix)),
+            "Live meeting capture"
+        );
+    }
+
+    #[test]
+    fn primary_source_label_prefers_capture_label_for_live_results() {
+        assert_eq!(
+            primary_source_label(&crate::tauri_api::TranscriptionSource {
+                provider: "whisper".to_string(),
+                model_id: "whisper-base".to_string(),
+                input_type: InputType::Live,
+                live_capture_profile: Some(LiveCaptureProfile::MeetingMix),
+                source_name: Some("Desk Mic".to_string()),
+                duration_ms: Some(1_000),
+            }),
+            "Live meeting capture"
+        );
+        assert_eq!(
+            primary_source_label(&crate::tauri_api::TranscriptionSource {
+                provider: "whisper".to_string(),
+                model_id: "whisper-base".to_string(),
+                input_type: InputType::File,
+                live_capture_profile: None,
+                source_name: Some("note.wav".to_string()),
+                duration_ms: Some(1_000),
+            }),
+            "note.wav"
+        );
+    }
+
+    #[test]
+    fn supporting_input_label_is_only_shown_for_live_results_with_device_names() {
+        assert_eq!(
+            supporting_input_label(&crate::tauri_api::TranscriptionSource {
+                provider: "whisper".to_string(),
+                model_id: "whisper-base".to_string(),
+                input_type: InputType::Live,
+                live_capture_profile: Some(LiveCaptureProfile::MeetingMix),
+                source_name: Some(" Desk Mic ".to_string()),
+                duration_ms: Some(1_000),
+            }),
+            Some("Input: Desk Mic".to_string())
+        );
+        assert_eq!(
+            supporting_input_label(&crate::tauri_api::TranscriptionSource {
+                provider: "whisper".to_string(),
+                model_id: "whisper-base".to_string(),
+                input_type: InputType::File,
+                live_capture_profile: None,
+                source_name: Some("note.wav".to_string()),
+                duration_ms: Some(1_000),
+            }),
+            None
+        );
     }
 
     #[test]
@@ -591,6 +692,7 @@ mod tests {
                 provider: "whisper".to_string(),
                 model_id: "whisper-base".to_string(),
                 input_type: InputType::Live,
+                live_capture_profile: Some(LiveCaptureProfile::MicrophoneOnly),
                 source_name: Some("Desk Mic".to_string()),
                 duration_ms: Some(1_000),
             },
