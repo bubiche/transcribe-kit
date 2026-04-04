@@ -5,6 +5,7 @@ mod utils;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+use crate::live_recording::LiveRecordingController;
 use crate::tauri_api::{
     get_settings, list_local_models, pick_audio_file, start_file_transcription, AppSettings,
     InputType, LiveRecordingState, LocalModelDescriptor, ProviderMode,
@@ -18,6 +19,7 @@ use self::utils::file_name_from_path;
 pub fn TranscribeScreen(
     active: Signal<bool>,
     transcription: TranscriptionController,
+    live_recording: LiveRecordingController,
     live_recording_state: Signal<LiveRecordingState>,
     live_recording_label: Signal<String>,
     live_recording_elapsed_ms: Signal<u64>,
@@ -94,15 +96,29 @@ pub fn TranscribeScreen(
     let is_listening =
         Signal::derive(move || matches!(live_recording_state.get(), LiveRecordingState::Recording));
 
-    let action_button_label = Signal::derive(move || {
-        if is_listening.get() {
-            "Listening...".to_string()
-        } else if transcription.is_transcribing.get() {
+    let file_button_label = Signal::derive(move || {
+        if transcription.is_transcribing.get() {
             "Transcribing...".to_string()
         } else {
             "Choose audio file".to_string()
         }
     });
+
+    let live_button_label = Signal::derive(move || {
+        if is_listening.get() {
+            "Stop recording".to_string()
+        } else {
+            "Start live capture".to_string()
+        }
+    });
+
+    let live_button_disabled = Signal::derive(move || {
+        transcription.is_transcribing.get() || !live_recording.is_ready.get()
+    });
+
+    let on_toggle_live = move |_| {
+        live_recording.toggle_recording();
+    };
 
     let on_choose_file = move |_| {
         spawn_local(async move {
@@ -162,9 +178,9 @@ pub fn TranscribeScreen(
     view! {
         <section class="panel content">
             <div class="hero">
-                <h2>"File transcription"</h2>
+                <h2>"Transcription"</h2>
                 <p>
-                    "Import an audio file, run it through the selected local Whisper model, and review the transcript in-app."
+                    "Start a live capture or import an audio file, run it through the selected local Whisper model, and review the transcript in-app."
                 </p>
             </div>
 
@@ -217,23 +233,33 @@ pub fn TranscribeScreen(
                     <section class="section import-panel">
                         <div class="import-layout">
                             <div class="import-copy">
-                                <p class="tag">"Import"</p>
-                                <h3>"Choose a local audio file"</h3>
+                                <p class="tag">"Capture"</p>
+                                <h3>"Live capture or file import"</h3>
                                 <p class="body-copy">
-                                    "Supported import formats: WAV, MP3, FLAC, OGG, and M4A. Files are decoded locally and sent straight to Whisper."
+                                    "Start a live recording from the selected audio input, or import a local audio file. Supported import formats: WAV, MP3, FLAC, OGG, and M4A."
                                 </p>
                             </div>
 
                             <div class="import-actions">
-                                <button
-                                    class="primary-button"
-                                    on:click=on_choose_file
-                                    disabled=move || {
-                                        is_listening.get() || transcription.is_transcribing.get()
-                                    }
-                                >
-                                    {move || action_button_label.get()}
-                                </button>
+                                <div class="capture-buttons">
+                                    <button
+                                        class="primary-button"
+                                        class:primary-button-active=move || is_listening.get()
+                                        on:click=on_toggle_live
+                                        disabled=move || live_button_disabled.get()
+                                    >
+                                        {move || live_button_label.get()}
+                                    </button>
+                                    <button
+                                        class="secondary-button"
+                                        on:click=on_choose_file
+                                        disabled=move || {
+                                            is_listening.get() || transcription.is_transcribing.get()
+                                        }
+                                    >
+                                        {move || file_button_label.get()}
+                                    </button>
+                                </div>
 
                                 <div class="mini-status">
                                     <span class="mini-chip">

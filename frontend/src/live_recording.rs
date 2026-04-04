@@ -1,5 +1,3 @@
-use std::{cell::Cell, rc::Rc};
-
 #[cfg(target_arch = "wasm32")]
 use js_sys::Date;
 use leptos::prelude::*;
@@ -30,6 +28,8 @@ pub struct LiveRecordingController {
     pub last_result: RwSignal<Option<LiveRecordingSummary>>,
     pub is_ready: RwSignal<bool>,
     pub transcription: TranscriptionController,
+    desired_recording: RwSignal<bool>,
+    request_in_flight: RwSignal<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,20 +68,18 @@ impl LiveRecordingController {
             last_result: RwSignal::new(None),
             is_ready: RwSignal::new(false),
             transcription,
+            desired_recording: RwSignal::new(false),
+            request_in_flight: RwSignal::new(false),
         }
     }
 
     pub fn initialize(self) {
-        let desired_recording = Rc::new(Cell::new(false));
-        let request_in_flight = Rc::new(Cell::new(false));
-
         self.refresh_armed_device_context();
 
-        let bootstrap_desired_recording = Rc::clone(&desired_recording);
         spawn_local(async move {
             match get_live_recording_status().await {
                 Ok(status) => {
-                    bootstrap_desired_recording
+                    self.desired_recording
                         .set(matches!(status.state, LiveRecordingState::Recording));
                     self.apply_status(status);
                 }
@@ -95,14 +93,9 @@ impl LiveRecordingController {
             self.is_ready.set(true);
         });
 
-        let hotkey_desired_recording = Rc::clone(&desired_recording);
-        let hotkey_request_in_flight = Rc::clone(&request_in_flight);
         spawn_local(async move {
             let _ = listen_to_app_event(HOTKEY_ACTIVITY_EVENT_NAME, {
                 let controller = self;
-                let desired_recording = Rc::clone(&hotkey_desired_recording);
-                let request_in_flight = Rc::clone(&hotkey_request_in_flight);
-
                 move |value: JsValue| {
                     let Ok(event) = serde_wasm_bindgen::from_value::<HotkeyActivityEvent>(value)
                     else {
@@ -113,7 +106,7 @@ impl LiveRecordingController {
                         controller.status.get_untracked().state,
                         LiveRecordingState::Recording
                     );
-                    let desired = desired_recording.get();
+                    let desired = controller.desired_recording.get_untracked();
 
                     let Some(next_goal) =
                         desired_recording_goal(event.mode, event.state, current_recording, desired)
@@ -121,32 +114,25 @@ impl LiveRecordingController {
                         return;
                     };
 
-                    desired_recording.set(next_goal);
-                    reconcile_recording_goal(
-                        controller,
-                        Rc::clone(&desired_recording),
-                        Rc::clone(&request_in_flight),
-                    );
+                    controller.desired_recording.set(next_goal);
+                    reconcile_recording_goal(controller);
                 }
             })
             .await;
         });
 
-        let status_desired_recording = Rc::clone(&desired_recording);
-        let status_request_in_flight = Rc::clone(&request_in_flight);
         spawn_local(async move {
             let _ = listen_to_app_event(LIVE_RECORDING_STATUS_EVENT_NAME, {
                 let controller = self;
-                let desired_recording = Rc::clone(&status_desired_recording);
-                let request_in_flight = Rc::clone(&status_request_in_flight);
                 move |value: JsValue| {
                     let Ok(status) = serde_wasm_bindgen::from_value::<LiveRecordingStatus>(value)
                     else {
                         return;
                     };
 
-                    if !request_in_flight.get() {
-                        desired_recording
+                    if !controller.request_in_flight.get_untracked() {
+                        controller
+                            .desired_recording
                             .set(matches!(status.state, LiveRecordingState::Recording));
                     }
                     controller.apply_status(status);
@@ -154,6 +140,15 @@ impl LiveRecordingController {
             })
             .await;
         });
+    }
+
+    pub fn toggle_recording(self) {
+        let is_recording = matches!(
+            self.status.get_untracked().state,
+            LiveRecordingState::Recording
+        );
+        self.desired_recording.set(!is_recording);
+        reconcile_recording_goal(self);
     }
 
     pub fn refresh_armed_device_context(self) {
@@ -213,17 +208,15 @@ impl LiveRecordingController {
     }
 }
 
-fn reconcile_recording_goal(
-    controller: LiveRecordingController,
-    desired_recording: Rc<Cell<bool>>,
-    request_in_flight: Rc<Cell<bool>>,
-) {
+fn reconcile_recording_goal(controller: LiveRecordingController) {
     let is_recording = matches!(
         controller.status.get_untracked().state,
         LiveRecordingState::Recording
     );
-    if desired_recording.get() && controller.transcription.is_transcribing.get_untracked() {
-        desired_recording.set(false);
+    if controller.desired_recording.get_untracked()
+        && controller.transcription.is_transcribing.get_untracked()
+    {
+        controller.desired_recording.set(false);
         controller.error_message.set(None);
         controller.feedback_message.set(Some(
             "Wait for the current transcription job to finish before starting another live capture."
@@ -232,15 +225,17 @@ fn reconcile_recording_goal(
         return;
     }
 
-    if request_in_flight.get() {
+    if controller.request_in_flight.get_untracked() {
         return;
     }
 
-    let Some(command) = next_command_for_goal(is_recording, desired_recording.get()) else {
+    let Some(command) =
+        next_command_for_goal(is_recording, controller.desired_recording.get_untracked())
+    else {
         return;
     };
 
-    request_in_flight.set(true);
+    controller.request_in_flight.set(true);
     controller.error_message.set(None);
 
     match command {
@@ -256,7 +251,7 @@ fn reconcile_recording_goal(
                         controller.apply_status(status);
                     }
                     Err(error) => {
-                        desired_recording.set(false);
+                        controller.desired_recording.set(false);
                         controller.status.set(idle_status());
                         controller.recording_started_at_ms.set(None);
                         controller
@@ -267,8 +262,8 @@ fn reconcile_recording_goal(
                     }
                 }
 
-                request_in_flight.set(false);
-                reconcile_recording_goal(controller, desired_recording, request_in_flight);
+                controller.request_in_flight.set(false);
+                reconcile_recording_goal(controller);
             });
         }
         LiveRecordingCommand::Stop => {
@@ -294,8 +289,8 @@ fn reconcile_recording_goal(
                     }
                 }
 
-                request_in_flight.set(false);
-                reconcile_recording_goal(controller, desired_recording, request_in_flight);
+                controller.request_in_flight.set(false);
+                reconcile_recording_goal(controller);
             });
         }
     }
@@ -647,16 +642,12 @@ mod tests {
             .update(|status| status.input_type = InputType::Live);
 
         let controller = LiveRecordingController::new(transcription);
-        let desired_recording = Rc::new(Cell::new(true));
-        let request_in_flight = Rc::new(Cell::new(true));
+        controller.desired_recording.set(true);
+        controller.request_in_flight.set(true);
 
-        reconcile_recording_goal(
-            controller,
-            Rc::clone(&desired_recording),
-            Rc::clone(&request_in_flight),
-        );
+        reconcile_recording_goal(controller);
 
-        assert!(!desired_recording.get());
+        assert!(!controller.desired_recording.get_untracked());
         assert_eq!(
             controller.feedback_message.get().as_deref(),
             Some("Wait for the current transcription job to finish before starting another live capture.")

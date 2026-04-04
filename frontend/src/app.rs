@@ -123,6 +123,7 @@ pub fn App() -> impl IntoView {
                     <TranscribeScreen
                         active=Signal::derive(move || active_screen.get() == Screen::Transcribe)
                         transcription=transcription
+                        live_recording=live_recording
                         live_recording_state=live_recording_state
                         live_recording_label=live_recording_label
                         live_recording_elapsed_ms=live_recording_elapsed_ms
@@ -367,7 +368,7 @@ fn LiveRecordingBanner(
         }
 
         format!(
-            "Ready to capture from {} when the recording hotkey is pressed.",
+            "Ready to capture from {}. Use the recording hotkey or the live capture button to start.",
             controller.armed_input_label.get()
         )
     });
@@ -379,7 +380,7 @@ fn LiveRecordingBanner(
                     <div class="recording-banner-dot"></div>
                     <p class="recording-banner-title">{move || state_label.get()}</p>
                 </div>
-                <span class="mini-chip">{move || format!("Mic: {}", active_device_label.get())}</span>
+                <span class="mini-chip">{move || format!("Input: {}", active_device_label.get())}</span>
             </div>
 
             <p class="recording-banner-copy">{move || detail_copy.get()}</p>
