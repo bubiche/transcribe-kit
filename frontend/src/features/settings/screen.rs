@@ -76,11 +76,11 @@ pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView 
 
             <Show when=move || !state.is_loading.get()>
                 <div class="settings-grid">
-                    <ProviderSettingsCard
-                        state=state
-                        custom_api_selected=custom_api_selected
-                    />
-                    <div class="settings-sidebar">
+                    <div class="settings-main">
+                        <ProviderSettingsCard
+                            state=state
+                            custom_api_selected=custom_api_selected
+                        />
                         <CaptureProfileField
                             live_capture_profile=state.form.live_capture_profile
                         />
@@ -89,6 +89,8 @@ pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView 
                             input_devices=state.input_devices
                             live_capture_profile=state.form.live_capture_profile
                         />
+                    </div>
+                    <div class="settings-sidebar">
                         <HotkeySettingsCard state=state />
                         <SettingsActionsCard
                             is_saving=state.is_saving
@@ -431,7 +433,88 @@ fn InputDeviceField(
                     "No audio inputs were detected right now. You can still keep the selection on System default."
                 </p>
             </Show>
+
+            <MeetingCaptureSetupHelp
+                selected_input_device_id=selected_input_device_id
+                input_devices=input_devices
+                live_capture_profile=live_capture_profile
+            />
         </section>
+    }
+}
+
+#[component]
+fn MeetingCaptureSetupHelp(
+    selected_input_device_id: RwSignal<Option<String>>,
+    input_devices: RwSignal<Vec<AudioInputDeviceDescriptor>>,
+    live_capture_profile: RwSignal<LiveCaptureProfile>,
+) -> impl IntoView {
+    let platform = detect_runtime_platform();
+    let behavior_summary = Signal::derive(move || {
+        let devices = input_devices.get();
+        let selected_id = selected_input_device_id.get();
+        build_capture_behavior_summary(live_capture_profile.get(), selected_id.as_deref(), &devices)
+    });
+    let troubleshooting_steps = Signal::derive(move || {
+        let devices = input_devices.get();
+        let selected_id = selected_input_device_id.get();
+        build_meeting_troubleshooting_steps(
+            platform,
+            live_capture_profile.get(),
+            selected_id.as_deref(),
+            &devices,
+        )
+    });
+    let platform_guidance = platform_meeting_guidance(platform);
+
+    view! {
+        <div class="meeting-setup-stack">
+            <div class=move || format!(
+                "capture-behavior capture-behavior-{}",
+                behavior_summary.get().tone.class_name()
+            )>
+                <p class="field-label">"Before you record"</p>
+                <p class="meeting-readiness-title">{move || behavior_summary.get().title}</p>
+                <p class="field-hint">{move || behavior_summary.get().body}</p>
+            </div>
+
+            <Show when=move || matches!(live_capture_profile.get(), LiveCaptureProfile::MeetingMix)>
+                <div class="meeting-guide-card meeting-guide-card-accent">
+                    <div class="meeting-guide-header">
+                        <p class="field-label">"First time using Meeting mix?"</p>
+                        <span class="mini-chip">"Meeting mix"</span>
+                    </div>
+                    <p class="meeting-readiness-title">
+                        "Choose a mixed input before you start recording."
+                    </p>
+                    <p class="field-hint">
+                        "For full meeting capture, choose an audio input that already contains both your microphone and the call audio, such as a loopback, monitor, or virtual cable input. Transcribe Kit records whichever input source you select."
+                    </p>
+                </div>
+
+                <div class="meeting-guide-card">
+                    <div class="meeting-guide-header">
+                        <p class="field-label">"Platform guidance"</p>
+                        <span class="mini-chip">
+                            {format!("Current platform: {}", platform_guidance.platform_label)}
+                        </span>
+                    </div>
+                    <p class="meeting-readiness-title">{platform_guidance.title}</p>
+                    <p class="field-hint">{platform_guidance.body}</p>
+                </div>
+
+                <div class="meeting-guide-card">
+                    <p class="field-label">"Troubleshooting"</p>
+                    <ul class="meeting-help-list">
+                        <For
+                            each=move || troubleshooting_steps.get()
+                            key=|step| step.clone()
+                            children=move |step| view! { <li>{step}</li> }
+                        />
+                    </ul>
+                </div>
+            </Show>
+        </div>
     }
 }
 
@@ -880,6 +963,73 @@ struct MeetingReadinessHint {
     device_kind: Option<InputDeviceKindHint>,
 }
 
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimePlatform {
+    MacOS,
+    Windows,
+    Linux,
+    Unknown,
+}
+
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+impl RuntimePlatform {
+    fn detect(platform_hint: &str, user_agent: &str) -> Self {
+        let combined = format!(
+            "{} {}",
+            platform_hint.to_lowercase(),
+            user_agent.to_lowercase()
+        );
+
+        if contains_any(&combined, &["mac", "darwin", "os x"]) {
+            return Self::MacOS;
+        }
+
+        if combined.contains("win") {
+            return Self::Windows;
+        }
+
+        if contains_any(&combined, &["linux", "x11"]) {
+            return Self::Linux;
+        }
+
+        Self::Unknown
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CaptureBehaviorSummary {
+    title: String,
+    body: String,
+    tone: MeetingReadinessTone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PlatformMeetingGuidance {
+    platform_label: &'static str,
+    title: &'static str,
+    body: &'static str,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn detect_runtime_platform() -> RuntimePlatform {
+    let Some(window) = web_sys::window() else {
+        return RuntimePlatform::Unknown;
+    };
+    let navigator = window.navigator();
+    let platform_hint = navigator.platform().unwrap_or_default();
+
+    RuntimePlatform::detect(
+        platform_hint.as_str(),
+        &navigator.user_agent().unwrap_or_default(),
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn detect_runtime_platform() -> RuntimePlatform {
+    RuntimePlatform::Unknown
+}
+
 fn classify_input_device(device: &AudioInputDeviceDescriptor) -> InputDeviceKindHint {
     let label = device.label.to_lowercase();
     let manufacturer = device
@@ -961,6 +1111,31 @@ fn input_device_kind_summary(kind: InputDeviceKindHint) -> &'static str {
         InputDeviceKindHint::VirtualLoopback => "Detected as a loopback or virtual input.",
         InputDeviceKindHint::MonitorSource => "Detected as a monitor-style input.",
         InputDeviceKindHint::Unknown => "The input type is not obvious from the device name.",
+    }
+}
+
+fn platform_meeting_guidance(platform: RuntimePlatform) -> PlatformMeetingGuidance {
+    match platform {
+        RuntimePlatform::MacOS => PlatformMeetingGuidance {
+            platform_label: "macOS",
+            title: "Meeting capture on macOS usually starts with a loopback-style input.",
+            body: "Look for a virtual loopback or other mixed input device created by your audio routing setup. Transcribe Kit does not directly grab speaker output here; it records the audio input you choose.",
+        },
+        RuntimePlatform::Windows => PlatformMeetingGuidance {
+            platform_label: "Windows",
+            title: "Meeting capture on Windows usually uses Stereo Mix, loopback, or virtual cable inputs.",
+            body: "If one of those inputs is available, select it for Meeting mix so the chosen input already contains both your voice and the call audio before recording starts.",
+        },
+        RuntimePlatform::Linux => PlatformMeetingGuidance {
+            platform_label: "Linux",
+            title: "Meeting capture on Linux usually relies on monitor sources or virtual inputs.",
+            body: "Look for a PipeWire or PulseAudio monitor source, or another mixed input exposed by the OS. Transcribe Kit records that input directly once you select it.",
+        },
+        RuntimePlatform::Unknown => PlatformMeetingGuidance {
+            platform_label: "This device",
+            title: "Meeting capture works best with a mixed input exposed by the operating system.",
+            body: "Look for a loopback, monitor, Stereo Mix, or virtual cable style input. Transcribe Kit records whichever audio input source you select.",
+        },
     }
 }
 
@@ -1050,6 +1225,135 @@ fn build_meeting_readiness_hint(
             device_kind,
         },
     }
+}
+
+fn build_capture_behavior_summary(
+    profile: LiveCaptureProfile,
+    selected_input_device_id: Option<&str>,
+    devices: &[AudioInputDeviceDescriptor],
+) -> CaptureBehaviorSummary {
+    if devices.is_empty() {
+        return CaptureBehaviorSummary {
+            title: "Not ready: no audio input is available.".to_string(),
+            body: "Live capture cannot start until the OS exposes at least one audio input. Once an input appears, Transcribe Kit will record whichever source you choose here.".to_string(),
+            tone: MeetingReadinessTone::Warning,
+        };
+    }
+
+    if let Some(selected_id) = selected_input_device_id {
+        if !devices.iter().any(|device| device.id == selected_id) {
+            return CaptureBehaviorSummary {
+                title: "Not ready: the saved audio input is unavailable.".to_string(),
+                body: "Pick another source or switch back to System default before recording so the app captures from a real audio input.".to_string(),
+                tone: MeetingReadinessTone::Warning,
+            };
+        }
+    }
+
+    let effective_device = effective_input_device(selected_input_device_id, devices);
+    let device_label = effective_device
+        .map(|device| device.label.as_str())
+        .unwrap_or("System default input");
+    let device_kind = effective_device.map(classify_input_device);
+
+    match (profile, device_kind) {
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::VirtualLoopback)) => {
+            CaptureBehaviorSummary {
+                title: format!("Ready to record from {device_label} as a meeting mix."),
+                body: "This input looks like a loopback or virtual source, so it will likely capture both your microphone and remote speakers if your routing is already set up.".to_string(),
+                tone: MeetingReadinessTone::Good,
+            }
+        }
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::MonitorSource)) => {
+            CaptureBehaviorSummary {
+                title: format!("Ready to record from {device_label} as a meeting mix."),
+                body: "This monitor-style input often carries the mixed meeting audio Transcribe Kit needs for both sides of the conversation.".to_string(),
+                tone: MeetingReadinessTone::Good,
+            }
+        }
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::PhysicalMic)) => {
+            CaptureBehaviorSummary {
+                title: format!(
+                    "Ready to record from {device_label}, but meeting capture may be incomplete."
+                ),
+                body: "Transcribe Kit will record this microphone exactly as selected, which usually means the transcript will focus on your voice and may miss remote speakers.".to_string(),
+                tone: MeetingReadinessTone::Warning,
+            }
+        }
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::Unknown))
+        | (LiveCaptureProfile::MeetingMix, None) => CaptureBehaviorSummary {
+            title: format!("Ready to record from {device_label}, but test this setup first."),
+            body: "The chosen source is not clearly a mixed input, so run a short sample recording before relying on it for a real meeting.".to_string(),
+            tone: MeetingReadinessTone::Caution,
+        },
+        (LiveCaptureProfile::MicrophoneOnly, Some(InputDeviceKindHint::PhysicalMic)) => {
+            CaptureBehaviorSummary {
+                title: format!("Ready to record from {device_label}."),
+                body: "Microphone-only capture is best for your own voice, dictation, and notes. Transcribe Kit will record this input source directly.".to_string(),
+                tone: MeetingReadinessTone::Good,
+            }
+        }
+        (
+            LiveCaptureProfile::MicrophoneOnly,
+            Some(InputDeviceKindHint::VirtualLoopback | InputDeviceKindHint::MonitorSource),
+        ) => CaptureBehaviorSummary {
+            title: format!("Ready to record from {device_label}."),
+            body: "Because this input looks mixed, it may include the whole meeting even though the profile is still set to Microphone only. Switch to Meeting mix if that is your intent.".to_string(),
+            tone: MeetingReadinessTone::Caution,
+        },
+        (LiveCaptureProfile::MicrophoneOnly, Some(InputDeviceKindHint::Unknown))
+        | (LiveCaptureProfile::MicrophoneOnly, None) => CaptureBehaviorSummary {
+            title: format!("Ready to record from {device_label}."),
+            body: "Transcribe Kit will record this selected input source as-is. If you want the full meeting instead of mostly your own voice, switch to Meeting mix first.".to_string(),
+            tone: MeetingReadinessTone::Caution,
+        },
+    }
+}
+
+fn build_meeting_troubleshooting_steps(
+    platform: RuntimePlatform,
+    profile: LiveCaptureProfile,
+    selected_input_device_id: Option<&str>,
+    devices: &[AudioInputDeviceDescriptor],
+) -> Vec<String> {
+    let effective_kind =
+        effective_input_device(selected_input_device_id, devices).map(classify_input_device);
+    let mut steps = vec![
+        "Run a 10-second test recording after changing audio routing, default inputs, or meeting-app audio settings.".to_string(),
+    ];
+
+    match (profile, effective_kind) {
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::PhysicalMic)) => steps.insert(
+            0,
+            "If the transcript mostly contains your own voice, switch away from a plain microphone and choose a loopback, monitor, or virtual cable input instead.".to_string(),
+        ),
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::Unknown))
+        | (LiveCaptureProfile::MeetingMix, None) => steps.insert(
+            0,
+            "If you are unsure about this source, prefer an input whose name clearly suggests loopback, monitor, Stereo Mix, or virtual cable behavior.".to_string(),
+        ),
+        _ => steps.insert(
+            0,
+            "Transcribe Kit records one selected audio input at a time, so the input itself needs to contain the audio you want before recording begins.".to_string(),
+        ),
+    }
+
+    steps.push(match platform {
+        RuntimePlatform::MacOS => {
+            "If no meeting-style input appears on macOS, create or enable a virtual loopback or other mixed input in your audio routing setup, then reopen Settings.".to_string()
+        }
+        RuntimePlatform::Windows => {
+            "If no meeting-style input appears on Windows, check whether Stereo Mix, a loopback device, or a virtual cable input can be enabled in your audio setup first.".to_string()
+        }
+        RuntimePlatform::Linux => {
+            "If no meeting-style input appears on Linux, expose a monitor source or virtual input through PipeWire or PulseAudio, then refresh your device list.".to_string()
+        }
+        RuntimePlatform::Unknown => {
+            "If no meeting-style input appears, enable or create a mixed input in your operating system or audio-routing tool before trying again.".to_string()
+        }
+    });
+
+    steps
 }
 
 fn effective_input_device<'a>(
@@ -1201,6 +1505,65 @@ mod tests {
 
         assert_eq!(hint.tone, MeetingReadinessTone::Warning);
         assert!(hint.title.contains("no audio input"));
+    }
+
+    #[test]
+    fn detects_runtime_platforms_from_platform_and_user_agent_hints() {
+        assert_eq!(
+            RuntimePlatform::detect("MacIntel", "Mozilla/5.0"),
+            RuntimePlatform::MacOS
+        );
+        assert_eq!(
+            RuntimePlatform::detect("Win32", "Mozilla/5.0"),
+            RuntimePlatform::Windows
+        );
+        assert_eq!(
+            RuntimePlatform::detect("x86_64", "Mozilla/5.0 (X11; Linux x86_64)"),
+            RuntimePlatform::Linux
+        );
+    }
+
+    #[test]
+    fn capture_behavior_summary_warns_for_meeting_mix_on_plain_mic() {
+        let device = sample_device("USB Microphone");
+        let selected_id = device.id.clone();
+        let summary = build_capture_behavior_summary(
+            LiveCaptureProfile::MeetingMix,
+            Some(selected_id.as_str()),
+            &[device],
+        );
+
+        assert_eq!(summary.tone, MeetingReadinessTone::Warning);
+        assert!(summary.title.contains("may be incomplete"));
+    }
+
+    #[test]
+    fn capture_behavior_summary_confirms_loopback_meeting_mix() {
+        let device = sample_device("BlackHole 2ch");
+        let selected_id = device.id.clone();
+        let summary = build_capture_behavior_summary(
+            LiveCaptureProfile::MeetingMix,
+            Some(selected_id.as_str()),
+            &[device],
+        );
+
+        assert_eq!(summary.tone, MeetingReadinessTone::Good);
+        assert!(summary.title.contains("meeting mix"));
+    }
+
+    #[test]
+    fn troubleshooting_steps_call_out_plain_mic_meeting_mix() {
+        let device = sample_device("USB Microphone");
+        let selected_id = device.id.clone();
+        let steps = build_meeting_troubleshooting_steps(
+            RuntimePlatform::Windows,
+            LiveCaptureProfile::MeetingMix,
+            Some(selected_id.as_str()),
+            &[device],
+        );
+
+        assert!(steps[0].contains("mostly contains your own voice"));
+        assert!(steps[2].contains("Windows"));
     }
 }
 

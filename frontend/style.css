@@ -230,11 +230,12 @@ body {
 
 .settings-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.9fr);
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.75fr);
   gap: 1rem;
   align-items: start;
 }
 
+.settings-main,
 .settings-sidebar {
   display: grid;
   gap: 1rem;
@@ -427,6 +428,59 @@ body {
 .meeting-readiness-warning {
   border-color: rgba(161, 75, 59, 0.22);
   background: rgba(255, 244, 241, 0.92);
+}
+
+.meeting-setup-stack {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.capture-behavior,
+.meeting-guide-card {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(247, 251, 244, 0.72);
+}
+
+.capture-behavior-good {
+  border-color: rgba(31, 122, 77, 0.22);
+  background: rgba(233, 247, 237, 0.84);
+}
+
+.capture-behavior-caution {
+  border-color: rgba(180, 140, 50, 0.24);
+  background: rgba(255, 249, 235, 0.92);
+}
+
+.capture-behavior-warning {
+  border-color: rgba(161, 75, 59, 0.22);
+  background: rgba(255, 244, 241, 0.92);
+}
+
+.meeting-guide-card-accent {
+  border-color: rgba(31, 122, 77, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(215, 240, 222, 0.58), transparent 34%),
+    rgba(247, 251, 244, 0.9);
+}
+
+.meeting-guide-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.meeting-help-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  display: grid;
+  gap: 0.45rem;
 }
 
 .device-kind-chip {
