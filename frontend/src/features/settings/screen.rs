@@ -284,8 +284,9 @@ fn InputDeviceField(
 
     let selected_device_hint = Signal::derive(move || {
         let devices = input_devices.get();
+        let selected_id = selected_input_device_id.get();
 
-        match selected_input_device_id.get() {
+        match selected_id.as_deref() {
             Some(selected_id) => devices
                 .into_iter()
                 .find(|device| device.id == selected_id)
@@ -296,7 +297,13 @@ fn InputDeviceField(
             None => devices
                 .into_iter()
                 .find(|device| device.is_default)
-                .map(|device| format!("System default is currently {}.", device.label))
+                .map(|device| {
+                    format!(
+                        "System default is currently {}. {}",
+                        device.label.clone(),
+                        input_device_kind_summary(classify_input_device(&device))
+                    )
+                })
                 .unwrap_or_else(|| {
                     "System default will follow the OS audio input choice whenever live capture starts."
                         .to_string()
@@ -314,8 +321,8 @@ fn InputDeviceField(
             None => devices.iter().find(|d| d.is_default),
         };
         effective_device
-            .map(|device| !looks_like_loopback_or_monitor(&device.label))
-            .unwrap_or(true)
+            .map(|device| classify_input_device(device) == InputDeviceKindHint::PhysicalMic)
+            .unwrap_or(false)
     });
 
     let device_count_label = Signal::derive(move || {
@@ -325,6 +332,12 @@ fn InputDeviceField(
             1 => "1 audio input detected".to_string(),
             _ => format!("{count} audio inputs detected"),
         }
+    });
+
+    let meeting_readiness_hint = Signal::derive(move || {
+        let devices = input_devices.get();
+        let selected_id = selected_input_device_id.get();
+        build_meeting_readiness_hint(live_capture_profile.get(), selected_id.as_deref(), &devices)
     });
 
     view! {
@@ -356,19 +369,15 @@ fn InputDeviceField(
                             "Previously selected input (currently unavailable)"
                         </option>
                     </Show>
-                    <option value="">"System default input"</option>
+                    <option value="">
+                        {move || system_default_option_label(&input_devices.get())}
+                    </option>
                     <For
                         each=move || input_devices.get()
                         key=|device| device.id.clone()
                         children=move |device| {
-                            let label = if device.is_default {
-                                format!("{} (Default)", device.label)
-                            } else {
-                                device.label.clone()
-                            };
-
                             view! {
-                                <option value=device.id.clone()>{label}</option>
+                                <option value=device.id.clone()>{format_input_device_option_label(&device)}</option>
                             }
                         }
                     />
@@ -376,6 +385,34 @@ fn InputDeviceField(
             </label>
 
             <p class="field-hint">{move || selected_device_hint.get()}</p>
+
+            <div class=move || format!(
+                "meeting-readiness meeting-readiness-{}",
+                meeting_readiness_hint.get().tone.class_name()
+            )>
+                <div class="meeting-readiness-header">
+                    <p class="field-label">"Will this work for meetings?"</p>
+                    <Show when=move || meeting_readiness_hint.get().device_kind.is_some()>
+                        <span class=move || {
+                            let hint = meeting_readiness_hint.get();
+                            let kind = hint.device_kind.unwrap_or(InputDeviceKindHint::Unknown);
+                            format!(
+                                "mini-chip device-kind-chip device-kind-chip-{}",
+                                kind.class_name()
+                            )
+                        }>
+                            {move || {
+                                let hint = meeting_readiness_hint.get();
+                                hint.device_kind
+                                    .map(|kind| kind.badge_label().to_string())
+                                    .unwrap_or_default()
+                            }}
+                        </span>
+                    </Show>
+                </div>
+                <p class="meeting-readiness-title">{move || meeting_readiness_hint.get().title}</p>
+                <p class="field-hint">{move || meeting_readiness_hint.get().body}</p>
+            </div>
 
             <Show when=move || meeting_mix_mic_warning.get()>
                 <p class="field-hint field-warning">
@@ -790,17 +827,239 @@ fn format_bytes(bytes: u64) -> String {
     format!("{gb:.2} GB")
 }
 
-fn looks_like_loopback_or_monitor(label: &str) -> bool {
-    let lower = label.to_lowercase();
-    lower.contains("loopback")
-        || lower.contains("monitor")
-        || lower.contains("stereo mix")
-        || lower.contains("virtual")
-        || lower.contains("cable")
-        || lower.contains("blackhole")
-        || lower.contains("soundflower")
-        || lower.contains("vb-audio")
-        || lower.contains("aggregate")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputDeviceKindHint {
+    PhysicalMic,
+    VirtualLoopback,
+    MonitorSource,
+    Unknown,
+}
+
+impl InputDeviceKindHint {
+    fn badge_label(self) -> &'static str {
+        match self {
+            Self::PhysicalMic => "Mic",
+            Self::VirtualLoopback => "Loopback",
+            Self::MonitorSource => "Monitor",
+            Self::Unknown => "Unknown",
+        }
+    }
+
+    fn class_name(self) -> &'static str {
+        match self {
+            Self::PhysicalMic => "mic",
+            Self::VirtualLoopback => "loopback",
+            Self::MonitorSource => "monitor",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeetingReadinessTone {
+    Good,
+    Caution,
+    Warning,
+}
+
+impl MeetingReadinessTone {
+    fn class_name(self) -> &'static str {
+        match self {
+            Self::Good => "good",
+            Self::Caution => "caution",
+            Self::Warning => "warning",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MeetingReadinessHint {
+    title: String,
+    body: String,
+    tone: MeetingReadinessTone,
+    device_kind: Option<InputDeviceKindHint>,
+}
+
+fn classify_input_device(device: &AudioInputDeviceDescriptor) -> InputDeviceKindHint {
+    let label = device.label.to_lowercase();
+    let manufacturer = device
+        .manufacturer
+        .as_deref()
+        .unwrap_or_default()
+        .to_lowercase();
+    let combined = format!("{label} {manufacturer}");
+
+    if contains_any(&combined, &["monitor", "what u hear", "wave out"]) {
+        return InputDeviceKindHint::MonitorSource;
+    }
+
+    if contains_any(
+        &combined,
+        &[
+            "loopback",
+            "stereo mix",
+            "virtual cable",
+            "blackhole",
+            "soundflower",
+            "vb-audio",
+            "aggregate",
+            "rogue amoeba",
+            "existential audio",
+        ],
+    ) || (combined.contains("virtual") && combined.contains("cable"))
+    {
+        return InputDeviceKindHint::VirtualLoopback;
+    }
+
+    if contains_any(
+        &combined,
+        &[
+            "microphone",
+            "mic",
+            "headset",
+            "airpods",
+            "webcam",
+            "built-in",
+            "array",
+            "internal mic",
+        ],
+    ) {
+        return InputDeviceKindHint::PhysicalMic;
+    }
+
+    InputDeviceKindHint::Unknown
+}
+
+fn contains_any(haystack: &str, patterns: &[&str]) -> bool {
+    patterns.iter().any(|pattern| haystack.contains(pattern))
+}
+
+fn format_input_device_option_label(device: &AudioInputDeviceDescriptor) -> String {
+    let default_suffix = if device.is_default { " (Default)" } else { "" };
+    format!(
+        "[{}] {}{}",
+        classify_input_device(device).badge_label(),
+        device.label,
+        default_suffix
+    )
+}
+
+fn system_default_option_label(devices: &[AudioInputDeviceDescriptor]) -> String {
+    match effective_input_device(None, devices) {
+        Some(device) => format!(
+            "System default input (currently [{}] {})",
+            classify_input_device(device).badge_label(),
+            device.label
+        ),
+        None => "System default input".to_string(),
+    }
+}
+
+fn input_device_kind_summary(kind: InputDeviceKindHint) -> &'static str {
+    match kind {
+        InputDeviceKindHint::PhysicalMic => "Detected as a mic-style input.",
+        InputDeviceKindHint::VirtualLoopback => "Detected as a loopback or virtual input.",
+        InputDeviceKindHint::MonitorSource => "Detected as a monitor-style input.",
+        InputDeviceKindHint::Unknown => "The input type is not obvious from the device name.",
+    }
+}
+
+fn build_meeting_readiness_hint(
+    profile: LiveCaptureProfile,
+    selected_input_device_id: Option<&str>,
+    devices: &[AudioInputDeviceDescriptor],
+) -> MeetingReadinessHint {
+    if devices.is_empty() {
+        return MeetingReadinessHint {
+            title: "No: no audio input is available right now.".to_string(),
+            body: "Transcribe Kit cannot capture a meeting until the OS exposes at least one audio input. Reconnect a device or keep System default selected and try again after the input appears.".to_string(),
+            tone: MeetingReadinessTone::Warning,
+            device_kind: None,
+        };
+    }
+
+    if let Some(selected_id) = selected_input_device_id {
+        if !devices.iter().any(|device| device.id == selected_id) {
+            return MeetingReadinessHint {
+                title: "No: the selected audio input is no longer available.".to_string(),
+                body: "Choose another input or switch back to System default before starting a meeting capture so the app records from a real source.".to_string(),
+                tone: MeetingReadinessTone::Warning,
+                device_kind: None,
+            };
+        }
+    }
+
+    let effective_device = effective_input_device(selected_input_device_id, devices);
+    let device_kind = effective_device.map(classify_input_device);
+
+    match (profile, device_kind) {
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::VirtualLoopback)) => {
+            MeetingReadinessHint {
+                title: "Yes: this looks like a strong meeting-mix input.".to_string(),
+                body: "Loopback and virtual cable inputs usually contain both local and remote audio before Transcribe Kit starts recording.".to_string(),
+                tone: MeetingReadinessTone::Good,
+                device_kind,
+            }
+        }
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::MonitorSource)) => {
+            MeetingReadinessHint {
+                title: "Yes: this monitor-style input is a good meeting candidate.".to_string(),
+                body: "Monitor sources often expose the mixed output you need for full meeting capture. Run a short test recording if you want to confirm levels.".to_string(),
+                tone: MeetingReadinessTone::Good,
+                device_kind,
+            }
+        }
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::PhysicalMic)) => {
+            MeetingReadinessHint {
+                title: "No: this still looks like a microphone.".to_string(),
+                body: "Meeting mix works best with an input that already combines your microphone and the call audio. A plain mic will usually miss remote participants.".to_string(),
+                tone: MeetingReadinessTone::Warning,
+                device_kind,
+            }
+        }
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::Unknown))
+        | (LiveCaptureProfile::MeetingMix, None) => MeetingReadinessHint {
+            title: "Maybe: this input might work, but it is not clearly a mixed source."
+                .to_string(),
+            body: "For full meeting capture, prefer a loopback, monitor, or virtual cable input. If you stay on this source, do a quick test before relying on it.".to_string(),
+            tone: MeetingReadinessTone::Caution,
+            device_kind,
+        },
+        (LiveCaptureProfile::MicrophoneOnly, Some(InputDeviceKindHint::PhysicalMic)) => {
+            MeetingReadinessHint {
+                title: "No: this setup is aimed at your voice, not the full meeting.".to_string(),
+                body: "Microphone-only capture is the right choice for dictation or personal notes. Switch to Meeting mix if you want to include remote speakers.".to_string(),
+                tone: MeetingReadinessTone::Warning,
+                device_kind,
+            }
+        }
+        (
+            LiveCaptureProfile::MicrophoneOnly,
+            Some(InputDeviceKindHint::VirtualLoopback | InputDeviceKindHint::MonitorSource),
+        ) => MeetingReadinessHint {
+            title: "Maybe: the device could capture the meeting, but the profile is still set to microphone only.".to_string(),
+            body: "Recording will still use this input, but switching the profile to Meeting mix makes the capture intent clearer and keeps future labeling honest.".to_string(),
+            tone: MeetingReadinessTone::Caution,
+            device_kind,
+        },
+        (LiveCaptureProfile::MicrophoneOnly, Some(InputDeviceKindHint::Unknown))
+        | (LiveCaptureProfile::MicrophoneOnly, None) => MeetingReadinessHint {
+            title: "Maybe: this could capture only part of the meeting.".to_string(),
+            body: "If the goal is full meeting capture, switch to Meeting mix and choose an input that clearly looks like a loopback, monitor, or virtual cable source.".to_string(),
+            tone: MeetingReadinessTone::Caution,
+            device_kind,
+        },
+    }
+}
+
+fn effective_input_device<'a>(
+    selected_input_device_id: Option<&str>,
+    devices: &'a [AudioInputDeviceDescriptor],
+) -> Option<&'a AudioInputDeviceDescriptor> {
+    match selected_input_device_id {
+        Some(selected_id) => devices.iter().find(|device| device.id == selected_id),
+        None => devices.iter().find(|device| device.is_default),
+    }
 }
 
 fn describe_input_device(device: &AudioInputDeviceDescriptor) -> String {
@@ -819,9 +1078,129 @@ fn describe_input_device(device: &AudioInputDeviceDescriptor) -> String {
     }
 
     if details.is_empty() {
-        format!("{} is ready for live recording.", device.label)
+        format!(
+            "{} is ready for live recording. {}",
+            device.label,
+            input_device_kind_summary(classify_input_device(device))
+        )
     } else {
-        format!("{}: {}", device.label, details.join(" • "))
+        format!(
+            "{}: {}. {}",
+            device.label,
+            details.join(" • "),
+            input_device_kind_summary(classify_input_device(device))
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_device(label: &str) -> AudioInputDeviceDescriptor {
+        AudioInputDeviceDescriptor {
+            id: label.to_string(),
+            label: label.to_string(),
+            manufacturer: None,
+            channels: Some(2),
+            sample_rate_hz: Some(48_000),
+            is_default: false,
+        }
+    }
+
+    #[test]
+    fn classifies_loopback_devices_from_label() {
+        let device = sample_device("BlackHole 2ch");
+        assert_eq!(
+            classify_input_device(&device),
+            InputDeviceKindHint::VirtualLoopback
+        );
+    }
+
+    #[test]
+    fn classifies_monitor_devices_from_label() {
+        let device = sample_device("Monitor of Built-in Audio");
+        assert_eq!(
+            classify_input_device(&device),
+            InputDeviceKindHint::MonitorSource
+        );
+    }
+
+    #[test]
+    fn classifies_microphones_from_label() {
+        let device = sample_device("MacBook Pro Microphone");
+        assert_eq!(
+            classify_input_device(&device),
+            InputDeviceKindHint::PhysicalMic
+        );
+    }
+
+    #[test]
+    fn meeting_mix_hint_recommends_loopback_inputs() {
+        let device = sample_device("BlackHole 2ch");
+        let selected_id = device.id.clone();
+        let hint = build_meeting_readiness_hint(
+            LiveCaptureProfile::MeetingMix,
+            Some(selected_id.as_str()),
+            &[device],
+        );
+
+        assert_eq!(hint.tone, MeetingReadinessTone::Good);
+        assert!(hint.title.starts_with("Yes:"));
+    }
+
+    #[test]
+    fn meeting_mix_hint_warns_for_microphones() {
+        let device = sample_device("USB Microphone");
+        let selected_id = device.id.clone();
+        let hint = build_meeting_readiness_hint(
+            LiveCaptureProfile::MeetingMix,
+            Some(selected_id.as_str()),
+            &[device],
+        );
+
+        assert_eq!(hint.tone, MeetingReadinessTone::Warning);
+        assert!(hint.title.starts_with("No:"));
+    }
+
+    #[test]
+    fn picker_option_labels_include_device_badges() {
+        let device = sample_device("BlackHole 2ch");
+        assert_eq!(
+            format_input_device_option_label(&device),
+            "[Loopback] BlackHole 2ch"
+        );
+    }
+
+    #[test]
+    fn system_default_option_shows_current_default_device_kind() {
+        let mut device = sample_device("BlackHole 2ch");
+        device.is_default = true;
+
+        assert_eq!(
+            system_default_option_label(&[device]),
+            "System default input (currently [Loopback] BlackHole 2ch)"
+        );
+    }
+
+    #[test]
+    fn meeting_readiness_warns_when_selected_device_is_missing() {
+        let hint = build_meeting_readiness_hint(
+            LiveCaptureProfile::MeetingMix,
+            Some("missing-device"),
+            &[sample_device("BlackHole 2ch")],
+        );
+
+        assert_eq!(hint.tone, MeetingReadinessTone::Warning);
+        assert!(hint.title.contains("no longer available"));
+    }
+
+    #[test]
+    fn meeting_readiness_warns_when_no_devices_are_available() {
+        let hint = build_meeting_readiness_hint(LiveCaptureProfile::MeetingMix, None, &[]);
+
+        assert_eq!(hint.tone, MeetingReadinessTone::Warning);
+        assert!(hint.title.contains("no audio input"));
     }
 }
 

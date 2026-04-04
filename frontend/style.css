@@ -391,6 +391,73 @@ body {
   box-shadow: 0 10px 24px rgba(31, 122, 77, 0.08);
 }
 
+.meeting-readiness {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(247, 251, 244, 0.72);
+}
+
+.meeting-readiness-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.meeting-readiness-title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.meeting-readiness-good {
+  border-color: rgba(31, 122, 77, 0.22);
+  background: rgba(233, 247, 237, 0.84);
+}
+
+.meeting-readiness-caution {
+  border-color: rgba(180, 140, 50, 0.24);
+  background: rgba(255, 249, 235, 0.92);
+}
+
+.meeting-readiness-warning {
+  border-color: rgba(161, 75, 59, 0.22);
+  background: rgba(255, 244, 241, 0.92);
+}
+
+.device-kind-chip {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.device-kind-chip-mic {
+  color: #8a4134;
+  border-color: rgba(161, 75, 59, 0.16);
+  background: rgba(255, 239, 235, 0.92);
+}
+
+.device-kind-chip-loopback {
+  color: #1b774a;
+  border-color: rgba(31, 122, 77, 0.16);
+  background: rgba(233, 247, 237, 0.92);
+}
+
+.device-kind-chip-monitor {
+  color: #7a6520;
+  border-color: rgba(180, 140, 50, 0.2);
+  background: rgba(255, 249, 235, 0.94);
+}
+
+.device-kind-chip-unknown {
+  color: var(--muted);
+  border-color: rgba(93, 114, 105, 0.18);
+  background: rgba(243, 247, 245, 0.94);
+}
+
 .field input:focus,
 .field select:focus {
   outline: 2px solid rgba(31, 122, 77, 0.18);
