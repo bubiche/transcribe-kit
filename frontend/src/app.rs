@@ -167,9 +167,15 @@ fn live_transcribing_detail_copy(
         .unwrap_or_else(|| live_transcribing_fallback_copy(capture_profile))
 }
 
-fn armed_capture_state_label(capture_profile: LiveCaptureProfile) -> &'static str {
+fn armed_capture_state_label(
+    capture_profile: LiveCaptureProfile,
+    dual_capture_armed: bool,
+) -> &'static str {
     match capture_profile {
         LiveCaptureProfile::MicrophoneOnly => "Armed for microphone capture",
+        LiveCaptureProfile::MeetingMix if dual_capture_armed => {
+            "Ready to capture meeting (mic + system audio)"
+        }
         LiveCaptureProfile::MeetingMix => "Armed for meeting capture",
     }
 }
@@ -177,11 +183,15 @@ fn armed_capture_state_label(capture_profile: LiveCaptureProfile) -> &'static st
 fn live_capture_state_label(
     capture_profile: LiveCaptureProfile,
     is_transcribing: bool,
+    dual_capture_armed: bool,
 ) -> &'static str {
     match (capture_profile, is_transcribing) {
         (LiveCaptureProfile::MicrophoneOnly, false) => "Recording microphone capture",
         (LiveCaptureProfile::MicrophoneOnly, true) => "Transcribing microphone capture",
-        (LiveCaptureProfile::MeetingMix, false) => "Recording meeting mix",
+        (LiveCaptureProfile::MeetingMix, false) if dual_capture_armed => {
+            "Recording meeting (mic + system audio)"
+        }
+        (LiveCaptureProfile::MeetingMix, false) => "Recording meeting capture",
         (LiveCaptureProfile::MeetingMix, true) => "Transcribing meeting capture",
     }
 }
@@ -267,23 +277,23 @@ mod tests {
     #[test]
     fn capture_state_labels_reflect_selected_profile() {
         assert_eq!(
-            armed_capture_state_label(LiveCaptureProfile::MicrophoneOnly),
+            armed_capture_state_label(LiveCaptureProfile::MicrophoneOnly, false),
             "Armed for microphone capture"
         );
         assert_eq!(
-            armed_capture_state_label(LiveCaptureProfile::MeetingMix),
-            "Armed for meeting capture"
+            armed_capture_state_label(LiveCaptureProfile::MeetingMix, true),
+            "Ready to capture meeting (mic + system audio)"
         );
         assert_eq!(
-            live_capture_state_label(LiveCaptureProfile::MicrophoneOnly, false),
+            live_capture_state_label(LiveCaptureProfile::MicrophoneOnly, false, false),
             "Recording microphone capture"
         );
         assert_eq!(
-            live_capture_state_label(LiveCaptureProfile::MeetingMix, false),
-            "Recording meeting mix"
+            live_capture_state_label(LiveCaptureProfile::MeetingMix, false, true),
+            "Recording meeting (mic + system audio)"
         );
         assert_eq!(
-            live_capture_state_label(LiveCaptureProfile::MeetingMix, true),
+            live_capture_state_label(LiveCaptureProfile::MeetingMix, true, true),
             "Transcribing meeting capture"
         );
     }
@@ -364,17 +374,18 @@ fn LiveRecordingBanner(
 
     let state_label = Signal::derive(move || {
         let capture_profile = controller.armed_capture_profile.get();
+        let dual_capture_armed = controller.armed_dual_capture.get();
         if matches!(controller.status.get().state, LiveRecordingState::Recording) {
-            live_capture_state_label(capture_profile, false).to_string()
+            live_capture_state_label(capture_profile, false, dual_capture_armed).to_string()
         } else if is_live_transcribing.get() {
-            live_capture_state_label(capture_profile, true).to_string()
+            live_capture_state_label(capture_profile, true, dual_capture_armed).to_string()
         } else if controller.error_message.get().is_some()
             || controller.load_error.get().is_some()
             || controller.device_context_error.get().is_some()
         {
             "Needs attention".to_string()
         } else if controller.is_ready.get() {
-            armed_capture_state_label(capture_profile).to_string()
+            armed_capture_state_label(capture_profile, dual_capture_armed).to_string()
         } else {
             "Loading".to_string()
         }

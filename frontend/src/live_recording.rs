@@ -21,6 +21,7 @@ pub struct LiveRecordingController {
     pub status: RwSignal<LiveRecordingStatus>,
     pub armed_input_label: RwSignal<String>,
     pub armed_capture_profile: RwSignal<LiveCaptureProfile>,
+    pub armed_dual_capture: RwSignal<bool>,
     pub recording_started_at_ms: RwSignal<Option<f64>>,
     pub feedback_message: RwSignal<Option<String>>,
     pub error_message: RwSignal<Option<String>>,
@@ -62,6 +63,7 @@ impl LiveRecordingController {
             status: RwSignal::new(idle_status()),
             armed_input_label: RwSignal::new("System default input".to_string()),
             armed_capture_profile: RwSignal::new(LiveCaptureProfile::default()),
+            armed_dual_capture: RwSignal::new(false),
             recording_started_at_ms: RwSignal::new(None),
             feedback_message: RwSignal::new(None),
             error_message: RwSignal::new(None),
@@ -162,21 +164,26 @@ impl LiveRecordingController {
                 (Ok(settings), Ok(devices)) => {
                     self.armed_capture_profile
                         .set(settings.live_capture_profile);
+                    self.armed_dual_capture
+                        .set(is_armed_for_dual_capture(&settings, &devices));
                     self.armed_input_label
                         .set(resolve_armed_input_label(&settings, &devices));
                     self.device_context_error.set(None);
                 }
                 (Err(settings_error), Err(devices_error)) => {
+                    self.armed_dual_capture.set(false);
                     self.device_context_error.set(Some(format!(
                         "Saved recording device context could not be refreshed: settings: {settings_error} | input devices: {devices_error}"
                     )));
                 }
                 (Err(error), _) => {
+                    self.armed_dual_capture.set(false);
                     self.device_context_error.set(Some(format!(
                         "Saved recording settings could not be refreshed: {error}"
                     )));
                 }
                 (_, Err(error)) => {
+                    self.armed_dual_capture.set(false);
                     self.device_context_error.set(Some(format!(
                         "Available audio inputs could not be refreshed: {error}"
                     )));
@@ -278,7 +285,13 @@ fn reconcile_recording_goal(controller: LiveRecordingController) {
             spawn_local(async move {
                 match stop_live_transcription().await {
                     Ok(result) => {
-                        let transition = stop_ui_transition(Ok(result.clone()));
+                        let expected_dual_capture = controller.armed_dual_capture.get_untracked()
+                            && matches!(
+                                controller.armed_capture_profile.get_untracked(),
+                                LiveCaptureProfile::MeetingMix
+                            );
+                        let transition =
+                            stop_ui_transition(Ok(result.clone()), expected_dual_capture);
                         apply_stop_ui_transition(controller, &transition);
 
                         if transition.armed_input_label.is_some() {
@@ -288,7 +301,7 @@ fn reconcile_recording_goal(controller: LiveRecordingController) {
                         run_live_transcription(controller, result).await;
                     }
                     Err(error) => {
-                        let transition = stop_ui_transition(Err(error));
+                        let transition = stop_ui_transition(Err(error), false);
                         apply_stop_ui_transition(controller, &transition);
                     }
                 }
@@ -316,6 +329,67 @@ fn resolve_armed_input_label(
             .map(|device| format!("System default ({})", device.label))
             .unwrap_or_else(|| "System default input".to_string()),
     }
+}
+
+fn has_output_loopback_device(devices: &[AudioInputDeviceDescriptor]) -> bool {
+    devices.iter().any(|device| device.is_output_loopback)
+}
+
+fn contains_any(haystack: &str, patterns: &[&str]) -> bool {
+    patterns.iter().any(|pattern| haystack.contains(pattern))
+}
+
+fn is_mic_like_input(device: &AudioInputDeviceDescriptor) -> bool {
+    if device.is_output_loopback {
+        return false;
+    }
+
+    let combined = format!(
+        "{} {}",
+        device.label.to_lowercase(),
+        device
+            .manufacturer
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase()
+    );
+
+    contains_any(
+        &combined,
+        &[
+            "microphone",
+            "mic",
+            "headset",
+            "airpods",
+            "webcam",
+            "built-in",
+            "array",
+            "internal mic",
+        ],
+    )
+}
+
+fn is_armed_for_dual_capture(
+    settings: &AppSettings,
+    devices: &[AudioInputDeviceDescriptor],
+) -> bool {
+    if !matches!(
+        settings.live_capture_profile,
+        LiveCaptureProfile::MeetingMix
+    ) {
+        return false;
+    }
+
+    if !has_output_loopback_device(devices) {
+        return false;
+    }
+
+    let effective_device = match settings.selected_input_device_id.as_deref() {
+        Some(selected_id) => devices.iter().find(|device| device.id == selected_id),
+        None => devices.iter().find(|device| device.is_default),
+    };
+
+    effective_device.map(is_mic_like_input).unwrap_or(false)
 }
 
 fn desired_recording_goal(
@@ -383,18 +457,18 @@ pub fn live_elapsed_duration_ms(
     wall_clock_duration_ms.max(status.duration_ms.unwrap_or_default())
 }
 
-fn stop_ui_transition(result: Result<LiveRecordingResult, String>) -> StopUiTransition {
+fn stop_ui_transition(
+    result: Result<LiveRecordingResult, String>,
+    expected_dual_capture: bool,
+) -> StopUiTransition {
     match result {
         Ok(result) => StopUiTransition {
             status: idle_status(),
             armed_input_label: Some(result.input_device_label.clone()),
             last_result: Some(live_recording_summary(&result)),
-            feedback_message: Some(format!(
-                "Capture stopped. Temporary WAV saved from {} ({}, {} Hz, {} ch).",
-                result.input_device_label,
-                format_duration(result.duration_ms),
-                result.sample_rate_hz,
-                result.channels
+            feedback_message: Some(stop_capture_feedback_message(
+                &result,
+                expected_dual_capture,
             )),
             error_message: None,
         },
@@ -406,6 +480,43 @@ fn stop_ui_transition(result: Result<LiveRecordingResult, String>) -> StopUiTran
             error_message: Some(format!("Live capture did not stop cleanly: {error}")),
         },
     }
+}
+
+fn stop_capture_feedback_message(
+    result: &LiveRecordingResult,
+    expected_dual_capture: bool,
+) -> String {
+    if expected_dual_capture && !result.is_dual_capture {
+        #[cfg(target_os = "macos")]
+        {
+            return format!(
+                "Capture stopped, but system audio was not captured. Transcribe Kit fell back to microphone-only recording from {} ({}, {} Hz, {} ch). Enable System Audio Recording for Transcribe Kit in System Settings > Privacy & Security, then try again.",
+                result.input_device_label,
+                format_duration(result.duration_ms),
+                result.sample_rate_hz,
+                result.channels
+            );
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            return format!(
+                "Capture stopped, but system audio was not captured. Transcribe Kit fell back to microphone-only recording from {} ({}, {} Hz, {} ch). Check system audio capture permissions and try again.",
+                result.input_device_label,
+                format_duration(result.duration_ms),
+                result.sample_rate_hz,
+                result.channels
+            );
+        }
+    }
+
+    format!(
+        "Capture stopped. Temporary WAV saved from {} ({}, {} Hz, {} ch).",
+        result.input_device_label,
+        format_duration(result.duration_ms),
+        result.sample_rate_hz,
+        result.channels
+    )
 }
 
 async fn run_live_transcription(
@@ -662,7 +773,7 @@ mod tests {
 
     #[test]
     fn stop_failure_transition_returns_idle_error_state() {
-        let transition = stop_ui_transition(Err("writer finalize failed".to_string()));
+        let transition = stop_ui_transition(Err("writer finalize failed".to_string()), false);
 
         assert_eq!(transition.status.state, LiveRecordingState::Idle);
         assert_eq!(
@@ -676,15 +787,18 @@ mod tests {
 
     #[test]
     fn stop_success_transition_returns_idle_success_state() {
-        let transition = stop_ui_transition(Ok(LiveRecordingResult {
-            file_path: "/tmp/capture.wav".to_string(),
-            input_device_id: Some("mic-1".to_string()),
-            input_device_label: "Desk Mic".to_string(),
-            sample_rate_hz: 48_000,
-            channels: 2,
-            duration_ms: 5_200,
-            is_dual_capture: false,
-        }));
+        let transition = stop_ui_transition(
+            Ok(LiveRecordingResult {
+                file_path: "/tmp/capture.wav".to_string(),
+                input_device_id: Some("mic-1".to_string()),
+                input_device_label: "Desk Mic".to_string(),
+                sample_rate_hz: 48_000,
+                channels: 2,
+                duration_ms: 5_200,
+                is_dual_capture: false,
+            }),
+            false,
+        );
 
         assert_eq!(transition.status.state, LiveRecordingState::Idle);
         assert_eq!(transition.error_message, None);
@@ -705,6 +819,30 @@ mod tests {
     }
 
     #[test]
+    fn stop_success_transition_warns_when_dual_capture_was_expected_but_not_used() {
+        let transition = stop_ui_transition(
+            Ok(LiveRecordingResult {
+                file_path: "/tmp/capture.wav".to_string(),
+                input_device_id: Some("mic-1".to_string()),
+                input_device_label: "Desk Mic".to_string(),
+                sample_rate_hz: 48_000,
+                channels: 2,
+                duration_ms: 5_200,
+                is_dual_capture: false,
+            }),
+            true,
+        );
+
+        assert_eq!(transition.status.state, LiveRecordingState::Idle);
+        assert_eq!(transition.error_message, None);
+        assert!(transition
+            .feedback_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("fell back to microphone-only recording"));
+    }
+
+    #[test]
     fn recording_to_transcribing_to_done_leaves_live_banner_idle_and_review_state_consistent() {
         let transcription = TranscriptionController::new();
         let controller = LiveRecordingController::new(transcription);
@@ -714,7 +852,7 @@ mod tests {
             .set(Some(now_ms() - 2_000.0));
 
         let capture_result = sample_capture_result();
-        let transition = stop_ui_transition(Ok(capture_result));
+        let transition = stop_ui_transition(Ok(capture_result), false);
         apply_stop_ui_transition(controller, &transition);
         apply_live_transcription_started(controller, "Desk Mic");
 
@@ -776,7 +914,7 @@ mod tests {
             .recording_started_at_ms
             .set(Some(now_ms() - 2_000.0));
 
-        let transition = stop_ui_transition(Ok(sample_capture_result()));
+        let transition = stop_ui_transition(Ok(sample_capture_result()), false);
         apply_stop_ui_transition(controller, &transition);
         apply_live_transcription_started(controller, "Desk Mic");
         apply_live_transcription_failed(controller, "Desk Mic", "provider mismatch");
@@ -848,6 +986,150 @@ mod tests {
             is_dual_capture: false,
         });
         assert_eq!(fallback_name, "Live recording");
+    }
+
+    #[test]
+    fn armed_dual_capture_requires_meeting_mix_mic_and_system_audio_support() {
+        let settings = AppSettings {
+            live_capture_profile: LiveCaptureProfile::MeetingMix,
+            selected_input_device_id: Some("mic".to_string()),
+            ..AppSettings::default()
+        };
+        let devices = vec![
+            AudioInputDeviceDescriptor {
+                id: "mic".to_string(),
+                label: "USB Microphone".to_string(),
+                manufacturer: None,
+                channels: Some(2),
+                sample_rate_hz: Some(48_000),
+                is_default: true,
+                is_output_loopback: false,
+            },
+            AudioInputDeviceDescriptor {
+                id: "system-audio".to_string(),
+                label: "Built-in Output (System Audio)".to_string(),
+                manufacturer: None,
+                channels: Some(2),
+                sample_rate_hz: Some(48_000),
+                is_default: false,
+                is_output_loopback: true,
+            },
+        ];
+
+        assert!(is_armed_for_dual_capture(&settings, &devices));
+    }
+
+    #[test]
+    fn armed_dual_capture_is_false_when_selected_input_is_system_audio() {
+        let settings = AppSettings {
+            live_capture_profile: LiveCaptureProfile::MeetingMix,
+            selected_input_device_id: Some("system-audio".to_string()),
+            ..AppSettings::default()
+        };
+        let devices = vec![
+            AudioInputDeviceDescriptor {
+                id: "mic".to_string(),
+                label: "USB Microphone".to_string(),
+                manufacturer: None,
+                channels: Some(2),
+                sample_rate_hz: Some(48_000),
+                is_default: false,
+                is_output_loopback: false,
+            },
+            AudioInputDeviceDescriptor {
+                id: "system-audio".to_string(),
+                label: "Built-in Output (System Audio)".to_string(),
+                manufacturer: None,
+                channels: Some(2),
+                sample_rate_hz: Some(48_000),
+                is_default: true,
+                is_output_loopback: true,
+            },
+        ];
+
+        assert!(!is_armed_for_dual_capture(&settings, &devices));
+    }
+
+    #[test]
+    fn armed_dual_capture_is_false_without_output_loopback_devices() {
+        let settings = AppSettings {
+            live_capture_profile: LiveCaptureProfile::MeetingMix,
+            selected_input_device_id: Some("mic".to_string()),
+            ..AppSettings::default()
+        };
+        let devices = vec![AudioInputDeviceDescriptor {
+            id: "mic".to_string(),
+            label: "USB Microphone".to_string(),
+            manufacturer: None,
+            channels: Some(2),
+            sample_rate_hz: Some(48_000),
+            is_default: true,
+            is_output_loopback: false,
+        }];
+
+        assert!(!is_armed_for_dual_capture(&settings, &devices));
+    }
+
+    #[test]
+    fn armed_dual_capture_is_false_for_virtual_loopback_inputs() {
+        let settings = AppSettings {
+            live_capture_profile: LiveCaptureProfile::MeetingMix,
+            selected_input_device_id: Some("loopback".to_string()),
+            ..AppSettings::default()
+        };
+        let devices = vec![
+            AudioInputDeviceDescriptor {
+                id: "loopback".to_string(),
+                label: "BlackHole 2ch".to_string(),
+                manufacturer: None,
+                channels: Some(2),
+                sample_rate_hz: Some(48_000),
+                is_default: true,
+                is_output_loopback: false,
+            },
+            AudioInputDeviceDescriptor {
+                id: "system-audio".to_string(),
+                label: "Built-in Output (System Audio)".to_string(),
+                manufacturer: None,
+                channels: Some(2),
+                sample_rate_hz: Some(48_000),
+                is_default: false,
+                is_output_loopback: true,
+            },
+        ];
+
+        assert!(!is_armed_for_dual_capture(&settings, &devices));
+    }
+
+    #[test]
+    fn armed_dual_capture_is_false_for_unknown_non_mic_labels() {
+        let settings = AppSettings {
+            live_capture_profile: LiveCaptureProfile::MeetingMix,
+            selected_input_device_id: Some("line-in".to_string()),
+            ..AppSettings::default()
+        };
+        let devices = vec![
+            AudioInputDeviceDescriptor {
+                id: "line-in".to_string(),
+                label: "Line In Port".to_string(),
+                manufacturer: None,
+                channels: Some(2),
+                sample_rate_hz: Some(48_000),
+                is_default: true,
+                is_output_loopback: false,
+            },
+            AudioInputDeviceDescriptor {
+                id: "system-audio".to_string(),
+                label: "Built-in Output (System Audio)".to_string(),
+                manufacturer: None,
+                channels: Some(2),
+                sample_rate_hz: Some(48_000),
+                is_default: false,
+                is_output_loopback: true,
+            },
+        ];
+
+        assert!(!is_armed_for_dual_capture(&settings, &devices));
     }
 
     fn recording_status(input_device_label: &str) -> LiveRecordingStatus {

@@ -100,13 +100,13 @@ pub(super) fn platform_meeting_guidance(platform: RuntimePlatform) -> PlatformMe
     match platform {
         RuntimePlatform::MacOS => PlatformMeetingGuidance {
             platform_label: "macOS",
-            title: "Meeting capture on macOS can use System Audio or a mixed input.",
-            body: "A System Audio source captures remote participants but not your own voice. For both sides, use a loopback or virtual cable input that mixes mic and speaker audio together.",
+            title: "Meeting mix on macOS supports automatic dual capture.",
+            body: "Transcribe Kit automatically captures both your microphone and system audio when Meeting mix is selected with a microphone input. No extra setup is needed on macOS 14.2+.",
         },
         RuntimePlatform::Windows => PlatformMeetingGuidance {
             platform_label: "Windows",
-            title: "Meeting capture on Windows can use System Audio or a mixed input.",
-            body: "A System Audio source captures remote participants but not your own voice. For both sides, use Stereo Mix, a loopback, or a virtual cable input that combines mic and speaker audio.",
+            title: "Meeting mix on Windows supports automatic dual capture.",
+            body: "Transcribe Kit automatically captures both your microphone and system audio when Meeting mix is selected with a microphone input.",
         },
         RuntimePlatform::Linux => PlatformMeetingGuidance {
             platform_label: "Linux",
@@ -121,10 +121,15 @@ pub(super) fn platform_meeting_guidance(platform: RuntimePlatform) -> PlatformMe
     }
 }
 
+pub(super) fn dual_capture_available(devices: &[AudioInputDeviceDescriptor]) -> bool {
+    devices.iter().any(|device| device.is_output_loopback)
+}
+
 pub(super) fn build_meeting_readiness_hint(
     profile: LiveCaptureProfile,
     selected_input_device_id: Option<&str>,
     devices: &[AudioInputDeviceDescriptor],
+    dual_capture_available: bool,
 ) -> MeetingReadinessHint {
     if devices.is_empty() {
         return MeetingReadinessHint {
@@ -175,11 +180,20 @@ pub(super) fn build_meeting_readiness_hint(
             }
         }
         (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::PhysicalMic)) => {
-            MeetingReadinessHint {
-                title: "No: this still looks like a microphone.".to_string(),
-                body: "Meeting mix works best with an input that already combines your microphone and the call audio. A plain mic will usually miss remote participants.".to_string(),
-                tone: MeetingReadinessTone::Warning,
-                device_kind,
+            if dual_capture_available {
+                MeetingReadinessHint {
+                    title: "Yes: both sides of the meeting will be captured.".to_string(),
+                    body: "Transcribe Kit will record your microphone and system audio simultaneously, then combine them for transcription.".to_string(),
+                    tone: MeetingReadinessTone::Good,
+                    device_kind,
+                }
+            } else {
+                MeetingReadinessHint {
+                    title: "No: this still looks like a microphone.".to_string(),
+                    body: "Meeting mix works best with an input that already combines your microphone and the call audio. A plain mic will usually miss remote participants.".to_string(),
+                    tone: MeetingReadinessTone::Warning,
+                    device_kind,
+                }
             }
         }
         (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::Unknown))
@@ -225,6 +239,7 @@ pub(super) fn build_capture_behavior_summary(
     profile: LiveCaptureProfile,
     selected_input_device_id: Option<&str>,
     devices: &[AudioInputDeviceDescriptor],
+    dual_capture_available: bool,
 ) -> CaptureBehaviorSummary {
     if devices.is_empty() {
         return CaptureBehaviorSummary {
@@ -273,12 +288,22 @@ pub(super) fn build_capture_behavior_summary(
             }
         }
         (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::PhysicalMic)) => {
-            CaptureBehaviorSummary {
-                title: format!(
-                    "Ready to record from {device_label}, but meeting capture may be incomplete."
-                ),
-                body: "Transcribe Kit will record this microphone exactly as selected, which usually means the transcript will focus on your voice and may miss remote speakers.".to_string(),
-                tone: MeetingReadinessTone::Warning,
+            if dual_capture_available {
+                CaptureBehaviorSummary {
+                    title: format!(
+                        "Ready to record both sides from {device_label} + system audio."
+                    ),
+                    body: "Your voice will be captured from the selected input, and remote participants will be captured from system audio output. Both are mixed into one transcript.".to_string(),
+                    tone: MeetingReadinessTone::Good,
+                }
+            } else {
+                CaptureBehaviorSummary {
+                    title: format!(
+                        "Ready to record from {device_label}, but meeting capture may be incomplete."
+                    ),
+                    body: "Transcribe Kit will record this microphone exactly as selected, which usually means the transcript will focus on your voice and may miss remote speakers.".to_string(),
+                    tone: MeetingReadinessTone::Warning,
+                }
             }
         }
         (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::Unknown))
@@ -320,6 +345,7 @@ pub(super) fn build_meeting_troubleshooting_steps(
     profile: LiveCaptureProfile,
     selected_input_device_id: Option<&str>,
     devices: &[AudioInputDeviceDescriptor],
+    dual_capture_available: bool,
 ) -> Vec<String> {
     let effective_kind =
         effective_input_device(selected_input_device_id, devices).map(classify_input_device);
@@ -328,10 +354,21 @@ pub(super) fn build_meeting_troubleshooting_steps(
     ];
 
     match (profile, effective_kind) {
-        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::PhysicalMic)) => steps.insert(
-            0,
-            "If the transcript mostly contains your own voice, switch away from a plain microphone and choose a loopback, monitor, or virtual cable input instead.".to_string(),
-        ),
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::PhysicalMic)) => {
+            if dual_capture_available {
+                steps.insert(
+                    0,
+                    "Meeting mix with a microphone uses dual capture automatically. If remote voices are still missing, check system audio capture permissions and run another short test."
+                        .to_string(),
+                )
+            } else {
+                steps.insert(
+                    0,
+                    "If the transcript mostly contains your own voice, switch away from a plain microphone and choose a loopback, monitor, or virtual cable input instead."
+                        .to_string(),
+                )
+            }
+        }
         (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::Unknown))
         | (LiveCaptureProfile::MeetingMix, None) => steps.insert(
             0,
@@ -345,7 +382,7 @@ pub(super) fn build_meeting_troubleshooting_steps(
 
     steps.push(match platform {
         RuntimePlatform::MacOS => {
-            "On macOS 14.2+, System Audio outputs should appear automatically. If they do not, check system audio permissions in System Settings > Privacy & Security, or set up a virtual loopback input as a fallback.".to_string()
+            "On macOS 14.2+, dual capture requires System Audio Recording permission. Grant it in System Settings > Privacy & Security > Screen & System Audio Recording, then restart the app.".to_string()
         }
         RuntimePlatform::Windows => {
             "On Windows, System Audio outputs should appear automatically for loopback capture. If you prefer a different setup, check whether Stereo Mix, a loopback device, or a virtual cable input can be enabled in your audio settings.".to_string()
@@ -386,6 +423,7 @@ mod tests {
             LiveCaptureProfile::MeetingMix,
             Some(selected_id.as_str()),
             &[device],
+            false,
         );
 
         assert_eq!(hint.tone, MeetingReadinessTone::Good);
@@ -400,6 +438,7 @@ mod tests {
             LiveCaptureProfile::MeetingMix,
             Some(selected_id.as_str()),
             &[device],
+            false,
         );
 
         assert_eq!(hint.tone, MeetingReadinessTone::Warning);
@@ -415,6 +454,7 @@ mod tests {
             LiveCaptureProfile::MeetingMix,
             Some(selected_id.as_str()),
             &[device],
+            true,
         );
 
         assert_eq!(hint.tone, MeetingReadinessTone::Caution);
@@ -428,6 +468,7 @@ mod tests {
             LiveCaptureProfile::MeetingMix,
             Some("missing-device"),
             &[sample_device("BlackHole 2ch")],
+            false,
         );
 
         assert_eq!(hint.tone, MeetingReadinessTone::Warning);
@@ -436,7 +477,7 @@ mod tests {
 
     #[test]
     fn meeting_readiness_warns_when_no_devices_are_available() {
-        let hint = build_meeting_readiness_hint(LiveCaptureProfile::MeetingMix, None, &[]);
+        let hint = build_meeting_readiness_hint(LiveCaptureProfile::MeetingMix, None, &[], false);
 
         assert_eq!(hint.tone, MeetingReadinessTone::Warning);
         assert!(hint.title.contains("no audio input"));
@@ -466,6 +507,7 @@ mod tests {
             LiveCaptureProfile::MeetingMix,
             Some(selected_id.as_str()),
             &[device],
+            false,
         );
 
         assert_eq!(summary.tone, MeetingReadinessTone::Warning);
@@ -480,6 +522,7 @@ mod tests {
             LiveCaptureProfile::MeetingMix,
             Some(selected_id.as_str()),
             &[device],
+            false,
         );
 
         assert_eq!(summary.tone, MeetingReadinessTone::Good);
@@ -495,9 +538,59 @@ mod tests {
             LiveCaptureProfile::MeetingMix,
             Some(selected_id.as_str()),
             &[device],
+            false,
         );
 
         assert!(steps[0].contains("mostly contains your own voice"));
         assert!(steps[2].contains("Windows"));
+    }
+
+    #[test]
+    fn dual_capture_available_is_true_when_system_audio_device_exists() {
+        let mut system_audio = sample_device("Built-in Output");
+        system_audio.is_output_loopback = true;
+
+        assert!(dual_capture_available(&[
+            sample_device("USB Microphone"),
+            system_audio
+        ]));
+        assert!(!dual_capture_available(&[sample_device("USB Microphone")]));
+    }
+
+    #[test]
+    fn meeting_mix_hint_confirms_dual_capture_for_microphone_when_available() {
+        let mic = sample_device("USB Microphone");
+        let selected_id = mic.id.clone();
+        let mut system_audio = sample_device("Built-in Output");
+        system_audio.is_output_loopback = true;
+        let devices = vec![mic, system_audio];
+        let hint = build_meeting_readiness_hint(
+            LiveCaptureProfile::MeetingMix,
+            Some(selected_id.as_str()),
+            &devices,
+            dual_capture_available(&devices),
+        );
+
+        assert_eq!(hint.tone, MeetingReadinessTone::Good);
+        assert!(hint.body.contains("microphone and system audio"));
+    }
+
+    #[test]
+    fn capture_behavior_summary_mentions_mic_and_system_audio_when_dual_capture_ready() {
+        let mic = sample_device("USB Microphone");
+        let selected_id = mic.id.clone();
+        let mut system_audio = sample_device("Built-in Output");
+        system_audio.is_output_loopback = true;
+        let devices = vec![mic, system_audio];
+        let summary = build_capture_behavior_summary(
+            LiveCaptureProfile::MeetingMix,
+            Some(selected_id.as_str()),
+            &devices,
+            dual_capture_available(&devices),
+        );
+
+        assert_eq!(summary.tone, MeetingReadinessTone::Good);
+        assert!(summary.title.contains("+ system audio"));
+        assert!(summary.body.contains("selected input"));
     }
 }

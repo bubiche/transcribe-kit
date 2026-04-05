@@ -10,7 +10,8 @@ use super::input_device_hints::{
 };
 use super::meeting_capture::{
     build_capture_behavior_summary, build_meeting_readiness_hint,
-    build_meeting_troubleshooting_steps, detect_runtime_platform, platform_meeting_guidance,
+    build_meeting_troubleshooting_steps, detect_runtime_platform, dual_capture_available,
+    platform_meeting_guidance,
 };
 use super::state::{DownloadState, SettingsFeatureState};
 
@@ -53,7 +54,7 @@ pub(super) fn CaptureProfileField(
                 .to_string()
         }
         LiveCaptureProfile::MeetingMix => {
-            "Records from an input that already contains both your voice and remote call audio, such as a loopback, monitor, or virtual cable input."
+            "Records both your microphone and system audio together when supported, then combines them into one meeting capture."
                 .to_string()
         }
     }
@@ -142,13 +143,34 @@ pub(super) fn InputDeviceField(
             return false;
         }
         let devices = input_devices.get();
-        let effective_device = match selected_input_device_id.get() {
+        let selected_id = selected_input_device_id.get();
+        let effective_device = match selected_id.as_deref() {
             Some(selected_id) => devices.iter().find(|d| d.id == selected_id),
             None => devices.iter().find(|d| d.is_default),
         };
+        let dual_capture_ready = dual_capture_available(&devices);
         effective_device
             .map(|device| classify_input_device(device) == InputDeviceKindHint::PhysicalMic)
             .unwrap_or(false)
+            && !dual_capture_ready
+    });
+
+    let dual_capture_ready_indicator = Signal::derive(move || {
+        if !matches!(live_capture_profile.get(), LiveCaptureProfile::MeetingMix) {
+            return false;
+        }
+
+        let devices = input_devices.get();
+        let selected_id = selected_input_device_id.get();
+        let effective_device = match selected_id.as_deref() {
+            Some(selected_id) => devices.iter().find(|d| d.id == selected_id),
+            None => devices.iter().find(|d| d.is_default),
+        };
+
+        dual_capture_available(&devices)
+            && effective_device
+                .map(|device| classify_input_device(device) == InputDeviceKindHint::PhysicalMic)
+                .unwrap_or(false)
     });
 
     let device_count_label = Signal::derive(move || {
@@ -163,7 +185,12 @@ pub(super) fn InputDeviceField(
     let meeting_readiness_hint = Signal::derive(move || {
         let devices = input_devices.get();
         let selected_id = selected_input_device_id.get();
-        build_meeting_readiness_hint(live_capture_profile.get(), selected_id.as_deref(), &devices)
+        build_meeting_readiness_hint(
+            live_capture_profile.get(),
+            selected_id.as_deref(),
+            &devices,
+            dual_capture_available(&devices),
+        )
     });
 
     view! {
@@ -211,6 +238,14 @@ pub(super) fn InputDeviceField(
             </label>
 
             <p class="field-hint">{move || selected_device_hint.get()}</p>
+
+            <Show when=move || dual_capture_ready_indicator.get()>
+                <p class="field-hint">
+                    <span class="mini-chip device-kind-chip device-kind-chip-loopback">
+                        "Dual capture available: your mic and system audio will both be recorded."
+                    </span>
+                </p>
+            </Show>
 
             <div class=move || format!(
                 "meeting-readiness meeting-readiness-{}",
@@ -277,7 +312,12 @@ fn MeetingCaptureSetupHelp(
     let behavior_summary = Signal::derive(move || {
         let devices = input_devices.get();
         let selected_id = selected_input_device_id.get();
-        build_capture_behavior_summary(live_capture_profile.get(), selected_id.as_deref(), &devices)
+        build_capture_behavior_summary(
+            live_capture_profile.get(),
+            selected_id.as_deref(),
+            &devices,
+            dual_capture_available(&devices),
+        )
     });
     let troubleshooting_steps = Signal::derive(move || {
         let devices = input_devices.get();
@@ -287,6 +327,7 @@ fn MeetingCaptureSetupHelp(
             live_capture_profile.get(),
             selected_id.as_deref(),
             &devices,
+            dual_capture_available(&devices),
         )
     });
     let platform_guidance = platform_meeting_guidance(platform);
@@ -309,10 +350,10 @@ fn MeetingCaptureSetupHelp(
                         <span class="mini-chip">"Meeting mix"</span>
                     </div>
                     <p class="meeting-readiness-title">
-                        "Choose a mixed input before you start recording."
+                        "Choose a microphone or system audio source before you start recording."
                     </p>
                     <p class="field-hint">
-                        "For full meeting capture, choose an audio input that already contains both your microphone and the call audio, such as a loopback, monitor, or virtual cable input. Transcribe Kit records whichever input source you select."
+                        "On supported platforms, selecting Meeting mix with a microphone input enables automatic dual capture (mic + system audio). You can also choose a System Audio source if you only want remote participants."
                     </p>
                 </div>
 

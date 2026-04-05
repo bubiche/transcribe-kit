@@ -6,9 +6,7 @@ use tauri::ipc::Channel;
 
 use crate::audio;
 use crate::engine::get_or_load_engine;
-use crate::models::{
-    InputType, LiveCaptureProfile, TranscriptResult, TranscriptionStreamEvent,
-};
+use crate::models::{InputType, LiveCaptureProfile, TranscriptResult, TranscriptionStreamEvent};
 use crate::providers::local_whisper::WhisperEngine;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,10 +80,7 @@ pub(crate) fn file_source_name(file_path: &Path) -> Option<String> {
         .map(|name| name.to_string())
 }
 
-pub(crate) fn live_source_name(
-    input_device_label: &str,
-    input_device_id: Option<&str>,
-) -> String {
+pub(crate) fn live_source_name(input_device_label: &str, input_device_id: Option<&str>) -> String {
     let trimmed_label = input_device_label.trim();
     if !trimmed_label.is_empty() {
         return trimmed_label.to_string();
