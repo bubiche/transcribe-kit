@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env, fs,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -31,6 +31,10 @@ pub enum LiveRecordingError {
     NotRecording,
     #[error("Transcribe Kit could not find an audio input to start recording. Connect an audio input or choose a different device in Settings.{0}")]
     NoInputDevice(&'static str),
+    #[error(
+        "Transcribe Kit could not find a system audio output to capture the meeting mix. Connect or enable an output device, then try again."
+    )]
+    NoOutputDevice,
     #[error("Transcribe Kit could not find the selected audio input anymore. Re-open Settings and choose an available input device.")]
     SelectedDeviceUnavailable,
     #[error("Transcribe Kit could not reach the audio backend for the selected input device.")]
@@ -43,6 +47,8 @@ pub enum LiveRecordingError {
     UnsupportedSampleFormat(String),
     #[error("Transcribe Kit could not create the temporary WAV recording: {0}")]
     CreateWav(String),
+    #[error("Transcribe Kit could not read the temporary WAV recording data: {0}")]
+    ReadWav(String),
     #[error("Transcribe Kit could not start the audio input stream: {0}")]
     BuildStream(String),
     #[error("Transcribe Kit could not begin recording from the audio input: {0}")]
@@ -65,7 +71,12 @@ struct LiveRecordingManager {
     active: Option<ActiveRecording>,
 }
 
-struct ActiveRecording {
+enum ActiveRecording {
+    Single(SingleStreamRecording),
+    Dual(DualStreamRecording),
+}
+
+struct SingleStreamRecording {
     stream: Stream,
     writer_tx: Sender<Vec<i16>>,
     writer_thread: JoinHandle<Result<(), LiveRecordingError>>,
@@ -76,6 +87,28 @@ struct ActiveRecording {
     sample_rate_hz: u32,
     channels: u16,
     output_file_path: PathBuf,
+}
+
+struct DualStreamRecording {
+    mic_stream: Stream,
+    mic_writer_tx: Sender<Vec<i16>>,
+    mic_writer_thread: JoinHandle<Result<(), LiveRecordingError>>,
+    mic_runtime_error: Arc<Mutex<Option<String>>>,
+    mic_captured_frames: Arc<AtomicU64>,
+    mic_sample_rate_hz: u32,
+    mic_channels: u16,
+    mic_temp_path: PathBuf,
+
+    loopback_stream: Stream,
+    loopback_writer_tx: Sender<Vec<i16>>,
+    loopback_writer_thread: JoinHandle<Result<(), LiveRecordingError>>,
+    loopback_runtime_error: Arc<Mutex<Option<String>>>,
+    loopback_captured_frames: Arc<AtomicU64>,
+    loopback_temp_path: PathBuf,
+
+    combined_output_path: PathBuf,
+    input_device_id: Option<String>,
+    input_device_label: String,
 }
 
 struct ResolvedInputDevice {
@@ -103,6 +136,7 @@ impl LiveRecordingManagerState {
         app: &AppHandle<R>,
         selected_input_device_id: Option<&str>,
         is_output_loopback: bool,
+        use_dual_capture: bool,
     ) -> Result<LiveRecordingStatus, LiveRecordingError> {
         let mut guard = self.inner.lock().unwrap();
 
@@ -110,7 +144,26 @@ impl LiveRecordingManagerState {
             return Err(LiveRecordingError::AlreadyRecording);
         }
 
-        let active = ActiveRecording::start(selected_input_device_id, is_output_loopback)?;
+        let active = if use_dual_capture {
+            match DualStreamRecording::start(selected_input_device_id) {
+                Ok(recording) => ActiveRecording::Dual(recording),
+                Err(error) => {
+                    eprintln!(
+                        "Dual capture unavailable ({error}). Falling back to single-stream recording."
+                    );
+                    ActiveRecording::Single(SingleStreamRecording::start(
+                        selected_input_device_id,
+                        is_output_loopback,
+                    )?)
+                }
+            }
+        } else {
+            ActiveRecording::Single(SingleStreamRecording::start(
+                selected_input_device_id,
+                is_output_loopback,
+            )?)
+        };
+
         let status = active.status();
         guard.active = Some(active);
         drop(guard);
@@ -140,6 +193,22 @@ impl LiveRecordingManagerState {
 }
 
 impl ActiveRecording {
+    fn stop(self) -> Result<LiveRecordingResult, LiveRecordingError> {
+        match self {
+            Self::Single(recording) => recording.stop(),
+            Self::Dual(recording) => recording.stop(),
+        }
+    }
+
+    fn status(&self) -> LiveRecordingStatus {
+        match self {
+            Self::Single(recording) => recording.status(),
+            Self::Dual(recording) => recording.status(),
+        }
+    }
+}
+
+impl SingleStreamRecording {
     fn start(
         selected_input_device_id: Option<&str>,
         is_output_loopback: bool,
@@ -206,24 +275,31 @@ impl ActiveRecording {
     }
 
     fn stop(self) -> Result<LiveRecordingResult, LiveRecordingError> {
-        let output_file_path = self.output_file_path.clone();
-        let sample_rate_hz = self.sample_rate_hz;
-        let channels = self.channels;
-        let input_device_id = self.input_device_id.clone();
-        let input_device_label = self.input_device_label.clone();
-        let captured_frames = self.captured_frames.load(Ordering::Relaxed);
-        let runtime_error = self.runtime_error.lock().unwrap().clone();
+        let SingleStreamRecording {
+            stream,
+            writer_tx,
+            writer_thread,
+            runtime_error,
+            captured_frames,
+            input_device_id,
+            input_device_label,
+            sample_rate_hz,
+            channels,
+            output_file_path,
+        } = self;
+        let captured_frames = captured_frames.load(Ordering::Relaxed);
 
-        drop(self.stream);
-        drop(self.writer_tx);
+        drop(stream);
+        drop(writer_tx);
 
-        match self.writer_thread.join() {
+        match writer_thread.join() {
             Ok(result) => result?,
             Err(_) => return Err(LiveRecordingError::WriterThreadPanicked),
         }
 
+        let runtime_error = runtime_error.lock().unwrap().clone();
         if let Some(runtime_error) = runtime_error {
-            let _ = std::fs::remove_file(&output_file_path);
+            let _ = fs::remove_file(&output_file_path);
             return Err(LiveRecordingError::StreamRuntime(runtime_error));
         }
 
@@ -234,6 +310,7 @@ impl ActiveRecording {
             sample_rate_hz,
             channels,
             duration_ms: duration_ms_from_frames(captured_frames, sample_rate_hz),
+            is_dual_capture: false,
         })
     }
 
@@ -250,6 +327,283 @@ impl ActiveRecording {
                 self.sample_rate_hz,
             )),
             message: self.runtime_error.lock().unwrap().clone(),
+        }
+    }
+}
+
+impl DualStreamRecording {
+    fn start(selected_input_device_id: Option<&str>) -> Result<Self, LiveRecordingError> {
+        let resolved_mic_device = resolve_input_device(selected_input_device_id)?;
+        let mic_supported_config =
+            resolved_mic_device
+                .device
+                .default_input_config()
+                .map_err(|error| {
+                    LiveRecordingError::DefaultConfig(with_platform_hint(error.to_string()))
+                })?;
+        if mic_supported_config.sample_format().is_dsd() {
+            return Err(LiveRecordingError::UnsupportedSampleFormat(
+                mic_supported_config.sample_format().to_string(),
+            ));
+        }
+
+        let loopback_device = cpal::default_host()
+            .default_output_device()
+            .ok_or(LiveRecordingError::NoOutputDevice)?;
+        let loopback_supported_config =
+            loopback_device.default_output_config().map_err(|error| {
+                LiveRecordingError::DefaultConfig(with_platform_hint(error.to_string()))
+            })?;
+        if loopback_supported_config.sample_format().is_dsd() {
+            return Err(LiveRecordingError::UnsupportedSampleFormat(
+                loopback_supported_config.sample_format().to_string(),
+            ));
+        }
+
+        let mic_stream_config = mic_supported_config.config();
+        let loopback_stream_config = loopback_supported_config.config();
+        let mic_sample_rate_hz = mic_supported_config.sample_rate();
+        let mic_channels = mic_supported_config.channels();
+
+        let mic_temp_path = next_recording_path();
+        let (mic_writer_tx, mic_writer_thread) =
+            spawn_wav_writer(&mic_temp_path, mic_sample_rate_hz, mic_channels)?;
+        let loopback_temp_path = next_recording_path();
+        let (loopback_writer_tx, loopback_writer_thread) = match spawn_wav_writer(
+            &loopback_temp_path,
+            loopback_supported_config.sample_rate(),
+            loopback_supported_config.channels(),
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                cleanup_failed_start(&mic_temp_path, mic_writer_tx, mic_writer_thread);
+                return Err(error);
+            }
+        };
+        let combined_output_path = next_recording_path();
+
+        let mic_runtime_error = Arc::new(Mutex::new(None));
+        let mic_captured_frames = Arc::new(AtomicU64::new(0));
+        let loopback_runtime_error = Arc::new(Mutex::new(None));
+        let loopback_captured_frames = Arc::new(AtomicU64::new(0));
+
+        let mic_stream = match build_input_stream(
+            &resolved_mic_device.device,
+            &mic_stream_config,
+            mic_supported_config.sample_format(),
+            mic_writer_tx.clone(),
+            Arc::clone(&mic_captured_frames),
+            Arc::clone(&mic_runtime_error),
+        ) {
+            Ok(stream) => stream,
+            Err(error) => {
+                cleanup_failed_start(&mic_temp_path, mic_writer_tx, mic_writer_thread);
+                cleanup_failed_start(
+                    &loopback_temp_path,
+                    loopback_writer_tx,
+                    loopback_writer_thread,
+                );
+                return Err(error);
+            }
+        };
+
+        let loopback_stream = match build_input_stream(
+            &loopback_device,
+            &loopback_stream_config,
+            loopback_supported_config.sample_format(),
+            loopback_writer_tx.clone(),
+            Arc::clone(&loopback_captured_frames),
+            Arc::clone(&loopback_runtime_error),
+        ) {
+            Ok(stream) => stream,
+            Err(error) => {
+                drop(mic_stream);
+                cleanup_failed_start(&mic_temp_path, mic_writer_tx, mic_writer_thread);
+                cleanup_failed_start(
+                    &loopback_temp_path,
+                    loopback_writer_tx,
+                    loopback_writer_thread,
+                );
+                return Err(error);
+            }
+        };
+
+        if let Err(error) = mic_stream.play() {
+            drop(loopback_stream);
+            drop(mic_stream);
+            cleanup_failed_start(&mic_temp_path, mic_writer_tx, mic_writer_thread);
+            cleanup_failed_start(
+                &loopback_temp_path,
+                loopback_writer_tx,
+                loopback_writer_thread,
+            );
+            return Err(LiveRecordingError::PlayStream(with_platform_hint(
+                error.to_string(),
+            )));
+        }
+
+        if let Err(error) = loopback_stream.play() {
+            drop(loopback_stream);
+            drop(mic_stream);
+            cleanup_failed_start(&mic_temp_path, mic_writer_tx, mic_writer_thread);
+            cleanup_failed_start(
+                &loopback_temp_path,
+                loopback_writer_tx,
+                loopback_writer_thread,
+            );
+            return Err(LiveRecordingError::PlayStream(with_platform_hint(
+                error.to_string(),
+            )));
+        }
+
+        Ok(Self {
+            mic_stream,
+            mic_writer_tx,
+            mic_writer_thread,
+            mic_runtime_error,
+            mic_captured_frames,
+            mic_sample_rate_hz,
+            mic_channels,
+            mic_temp_path,
+            loopback_stream,
+            loopback_writer_tx,
+            loopback_writer_thread,
+            loopback_runtime_error,
+            loopback_captured_frames,
+            loopback_temp_path,
+            combined_output_path,
+            input_device_id: resolved_mic_device.input_device_id,
+            input_device_label: resolved_mic_device.input_device_label,
+        })
+    }
+
+    fn stop(self) -> Result<LiveRecordingResult, LiveRecordingError> {
+        let DualStreamRecording {
+            mic_stream,
+            mic_writer_tx,
+            mic_writer_thread,
+            mic_runtime_error,
+            mic_captured_frames,
+            mic_sample_rate_hz,
+            mic_channels,
+            mic_temp_path,
+            loopback_stream,
+            loopback_writer_tx,
+            loopback_writer_thread,
+            loopback_runtime_error,
+            loopback_captured_frames,
+            loopback_temp_path,
+            combined_output_path,
+            input_device_id,
+            input_device_label,
+        } = self;
+        let mic_captured_frames = mic_captured_frames.load(Ordering::Relaxed);
+        let loopback_captured_frames = loopback_captured_frames.load(Ordering::Relaxed);
+
+        drop(mic_stream);
+        drop(loopback_stream);
+        drop(mic_writer_tx);
+        drop(loopback_writer_tx);
+
+        let mic_writer_result = join_writer_thread(mic_writer_thread);
+        let loopback_writer_result = join_writer_thread(loopback_writer_thread);
+        let mic_runtime_error = mic_runtime_error.lock().unwrap().clone();
+        let loopback_runtime_error = loopback_runtime_error.lock().unwrap().clone();
+
+        if let Err(error) = mic_writer_result {
+            let _ = fs::remove_file(&mic_temp_path);
+            let _ = fs::remove_file(&loopback_temp_path);
+            let _ = fs::remove_file(&combined_output_path);
+            return Err(error);
+        }
+
+        if let Some(runtime_error) = mic_runtime_error {
+            let _ = fs::remove_file(&mic_temp_path);
+            let _ = fs::remove_file(&loopback_temp_path);
+            let _ = fs::remove_file(&combined_output_path);
+            return Err(LiveRecordingError::StreamRuntime(runtime_error));
+        }
+
+        let loopback_writer_error = loopback_writer_result.err();
+        if loopback_writer_error.is_some() || loopback_runtime_error.is_some() {
+            if let Some(error) = loopback_writer_error {
+                eprintln!("Loopback writer failed: {error}");
+            }
+            if let Some(runtime_error) = loopback_runtime_error {
+                eprintln!("Loopback stream runtime error: {runtime_error}");
+            }
+            let _ = fs::remove_file(&loopback_temp_path);
+            let _ = fs::remove_file(&combined_output_path);
+            return Ok(single_file_result(
+                &mic_temp_path,
+                input_device_id,
+                input_device_label,
+                mic_sample_rate_hz,
+                mic_channels,
+                duration_ms_from_frames(mic_captured_frames, mic_sample_rate_hz),
+                false,
+            ));
+        }
+
+        if let Err(error) =
+            mix_wav_files(&mic_temp_path, &loopback_temp_path, &combined_output_path)
+        {
+            eprintln!(
+                "Dual capture mix failed ({error}). Falling back to microphone-only recording."
+            );
+            let _ = fs::remove_file(&loopback_temp_path);
+            let _ = fs::remove_file(&combined_output_path);
+            return Ok(single_file_result(
+                &mic_temp_path,
+                input_device_id,
+                input_device_label,
+                mic_sample_rate_hz,
+                mic_channels,
+                duration_ms_from_frames(mic_captured_frames, mic_sample_rate_hz),
+                false,
+            ));
+        }
+
+        let _ = fs::remove_file(&mic_temp_path);
+        let _ = fs::remove_file(&loopback_temp_path);
+
+        Ok(LiveRecordingResult {
+            file_path: combined_output_path.to_string_lossy().into_owned(),
+            input_device_id,
+            input_device_label,
+            sample_rate_hz: mic_sample_rate_hz,
+            channels: 1,
+            duration_ms: duration_ms_from_wav_file(&combined_output_path).unwrap_or_else(|_| {
+                duration_ms_from_frames(
+                    mic_captured_frames.max(loopback_captured_frames),
+                    mic_sample_rate_hz,
+                )
+            }),
+            is_dual_capture: true,
+        })
+    }
+
+    fn status(&self) -> LiveRecordingStatus {
+        let message = self.mic_runtime_error.lock().unwrap().clone().or_else(|| {
+            self.loopback_runtime_error
+                .lock()
+                .unwrap()
+                .clone()
+                .map(|runtime_error| format!("System audio capture: {runtime_error}"))
+        });
+
+        LiveRecordingStatus {
+            state: LiveRecordingState::Recording,
+            input_device_id: self.input_device_id.clone(),
+            input_device_label: Some(self.input_device_label.clone()),
+            output_file_path: Some(self.combined_output_path.to_string_lossy().into_owned()),
+            sample_rate_hz: Some(self.mic_sample_rate_hz),
+            channels: Some(self.mic_channels),
+            duration_ms: Some(duration_ms_from_frames(
+                self.mic_captured_frames.load(Ordering::Relaxed),
+                self.mic_sample_rate_hz,
+            )),
+            message,
         }
     }
 }
@@ -346,6 +700,172 @@ fn next_recording_path() -> PathBuf {
     temp_dir.join(format!("transcribe-kit-live-{process_id}.wav"))
 }
 
+fn mix_wav_files(
+    mic_path: &Path,
+    loopback_path: &Path,
+    output_path: &Path,
+) -> Result<(), LiveRecordingError> {
+    let (mic_samples, mic_sample_rate_hz) = read_wav_as_mono_i16(mic_path)?;
+    let (loopback_samples, loopback_sample_rate_hz) = read_wav_as_mono_i16(loopback_path)?;
+
+    let loopback_samples = if mic_sample_rate_hz == loopback_sample_rate_hz {
+        loopback_samples
+    } else {
+        eprintln!(
+            "Mixing WAV files with different sample rates: mic={} Hz loopback={} Hz. Resampling loopback.",
+            mic_sample_rate_hz, loopback_sample_rate_hz
+        );
+        resample_linear_i16(
+            &loopback_samples,
+            loopback_sample_rate_hz,
+            mic_sample_rate_hz,
+        )
+    };
+
+    let mut writer = hound::WavWriter::create(output_path, wav_spec(mic_sample_rate_hz, 1))
+        .map_err(|error| LiveRecordingError::CreateWav(error.to_string()))?;
+
+    let max_len = mic_samples.len().max(loopback_samples.len());
+    for index in 0..max_len {
+        let sample = match (
+            mic_samples.get(index).copied(),
+            loopback_samples.get(index).copied(),
+        ) {
+            (Some(mic), Some(loopback)) => mix_sample(mic, loopback),
+            (Some(mic), None) => mic,
+            (None, Some(loopback)) => loopback,
+            (None, None) => break,
+        };
+        writer
+            .write_sample(sample)
+            .map_err(|error| LiveRecordingError::FinalizeWav(error.to_string()))?;
+    }
+
+    writer
+        .finalize()
+        .map_err(|error| LiveRecordingError::FinalizeWav(error.to_string()))?;
+    Ok(())
+}
+
+fn mix_sample(a: i16, b: i16) -> i16 {
+    (a as i32 + b as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16
+}
+
+fn read_wav_as_mono_i16(path: &Path) -> Result<(Vec<i16>, u32), LiveRecordingError> {
+    let mut reader = hound::WavReader::open(path)
+        .map_err(|error| LiveRecordingError::ReadWav(error.to_string()))?;
+    let spec = reader.spec();
+    if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
+        return Err(LiveRecordingError::ReadWav(format!(
+            "unsupported WAV format (sample_format={:?}, bits_per_sample={})",
+            spec.sample_format, spec.bits_per_sample
+        )));
+    }
+
+    let interleaved = reader
+        .samples::<i16>()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| LiveRecordingError::ReadWav(error.to_string()))?;
+    Ok((
+        downmix_to_mono(interleaved, spec.channels),
+        spec.sample_rate,
+    ))
+}
+
+fn downmix_to_mono(interleaved_samples: Vec<i16>, channels: u16) -> Vec<i16> {
+    if channels <= 1 {
+        return interleaved_samples;
+    }
+
+    let channels = channels as usize;
+    interleaved_samples
+        .chunks(channels)
+        .map(|frame| {
+            let sum = frame.iter().map(|sample| *sample as i32).sum::<i32>();
+            (sum / frame.len() as i32) as i16
+        })
+        .collect()
+}
+
+fn resample_linear_i16(samples: &[i16], source_rate_hz: u32, target_rate_hz: u32) -> Vec<i16> {
+    if source_rate_hz == target_rate_hz {
+        return samples.to_vec();
+    }
+    if source_rate_hz == 0 || target_rate_hz == 0 || samples.is_empty() {
+        return Vec::new();
+    }
+    if samples.len() == 1 {
+        return samples.to_vec();
+    }
+
+    let ratio = target_rate_hz as f64 / source_rate_hz as f64;
+    let target_len = ((samples.len() as f64) * ratio).round().max(1.0) as usize;
+    let source_step = source_rate_hz as f64 / target_rate_hz as f64;
+
+    (0..target_len)
+        .map(|target_index| {
+            let source_pos = target_index as f64 * source_step;
+            let source_index = source_pos.floor() as usize;
+            let frac = source_pos - source_index as f64;
+
+            if source_index + 1 >= samples.len() {
+                return samples[samples.len() - 1];
+            }
+
+            let a = samples[source_index] as f64;
+            let b = samples[source_index + 1] as f64;
+            (a + ((b - a) * frac))
+                .round()
+                .clamp(i16::MIN as f64, i16::MAX as f64) as i16
+        })
+        .collect()
+}
+
+fn duration_ms_from_wav_file(path: &Path) -> Result<u64, LiveRecordingError> {
+    let reader = hound::WavReader::open(path)
+        .map_err(|error| LiveRecordingError::ReadWav(error.to_string()))?;
+    Ok(duration_ms_from_frames(
+        reader.duration() as u64,
+        reader.spec().sample_rate,
+    ))
+}
+
+fn single_file_result(
+    path: &Path,
+    input_device_id: Option<String>,
+    input_device_label: String,
+    fallback_sample_rate_hz: u32,
+    fallback_channels: u16,
+    fallback_duration_ms: u64,
+    is_dual_capture: bool,
+) -> LiveRecordingResult {
+    let output = hound::WavReader::open(path)
+        .ok()
+        .map(|reader| {
+            let spec = reader.spec();
+            (
+                spec.sample_rate,
+                spec.channels,
+                duration_ms_from_frames(reader.duration() as u64, spec.sample_rate),
+            )
+        })
+        .unwrap_or((
+            fallback_sample_rate_hz,
+            fallback_channels,
+            fallback_duration_ms,
+        ));
+
+    LiveRecordingResult {
+        file_path: path.to_string_lossy().into_owned(),
+        input_device_id,
+        input_device_label,
+        sample_rate_hz: output.0,
+        channels: output.1,
+        duration_ms: output.2,
+        is_dual_capture,
+    }
+}
+
 fn spawn_wav_writer(
     path: &Path,
     sample_rate_hz: u32,
@@ -373,6 +893,15 @@ fn spawn_wav_writer(
     });
 
     Ok((tx, writer_thread))
+}
+
+fn join_writer_thread(
+    writer_thread: JoinHandle<Result<(), LiveRecordingError>>,
+) -> Result<(), LiveRecordingError> {
+    match writer_thread.join() {
+        Ok(result) => result,
+        Err(_) => Err(LiveRecordingError::WriterThreadPanicked),
+    }
 }
 
 fn wav_spec(sample_rate_hz: u32, channels: u16) -> hound::WavSpec {
@@ -569,7 +1098,7 @@ fn cleanup_failed_start(
 ) {
     drop(writer_tx);
     let _ = writer_thread.join();
-    let _ = std::fs::remove_file(path);
+    let _ = fs::remove_file(path);
 }
 
 fn duration_ms_from_frames(frame_count: u64, sample_rate_hz: u32) -> u64 {
@@ -653,6 +1182,82 @@ mod tests {
     }
 
     #[test]
+    fn mix_wav_files_combines_equal_length_mono_files() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mic_path = temp_dir.path().join("mic.wav");
+        let loopback_path = temp_dir.path().join("loopback.wav");
+        let output_path = temp_dir.path().join("mixed.wav");
+
+        write_test_wav(&mic_path, 16_000, 1, &[100, -100, 25]);
+        write_test_wav(&loopback_path, 16_000, 1, &[10, 20, -30]);
+
+        mix_wav_files(&mic_path, &loopback_path, &output_path).expect("mix");
+
+        assert_eq!(read_test_samples(&output_path), vec![110, -80, -5]);
+    }
+
+    #[test]
+    fn mix_wav_files_writes_remaining_samples_from_longer_file() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mic_path = temp_dir.path().join("mic.wav");
+        let loopback_path = temp_dir.path().join("loopback.wav");
+        let output_path = temp_dir.path().join("mixed.wav");
+
+        write_test_wav(&mic_path, 16_000, 1, &[100, 100]);
+        write_test_wav(&loopback_path, 16_000, 1, &[50, 60, 70, 80]);
+
+        mix_wav_files(&mic_path, &loopback_path, &output_path).expect("mix");
+
+        assert_eq!(read_test_samples(&output_path), vec![150, 160, 70, 80]);
+    }
+
+    #[test]
+    fn mix_wav_files_downmixes_stereo_to_mono_before_mixing() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mic_path = temp_dir.path().join("mic_stereo.wav");
+        let loopback_path = temp_dir.path().join("loopback_mono.wav");
+        let output_path = temp_dir.path().join("mixed.wav");
+
+        write_test_wav(&mic_path, 16_000, 2, &[100, 300, 200, 400]);
+        write_test_wav(&loopback_path, 16_000, 1, &[10, 20]);
+
+        mix_wav_files(&mic_path, &loopback_path, &output_path).expect("mix");
+
+        assert_eq!(read_test_samples(&output_path), vec![210, 320]);
+    }
+
+    #[test]
+    fn mix_wav_files_clamps_summed_samples_to_i16_range() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mic_path = temp_dir.path().join("mic.wav");
+        let loopback_path = temp_dir.path().join("loopback.wav");
+        let output_path = temp_dir.path().join("mixed.wav");
+
+        write_test_wav(&mic_path, 16_000, 1, &[i16::MAX, i16::MIN]);
+        write_test_wav(&loopback_path, 16_000, 1, &[100, -100]);
+
+        mix_wav_files(&mic_path, &loopback_path, &output_path).expect("mix");
+
+        assert_eq!(read_test_samples(&output_path), vec![i16::MAX, i16::MIN]);
+    }
+
+    #[test]
+    fn mix_wav_files_uses_mic_sample_rate_for_output() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mic_path = temp_dir.path().join("mic.wav");
+        let loopback_path = temp_dir.path().join("loopback.wav");
+        let output_path = temp_dir.path().join("mixed.wav");
+
+        write_test_wav(&mic_path, 16_000, 1, &[1000, 0, -1000, 500]);
+        write_test_wav(&loopback_path, 8_000, 1, &[500, -500]);
+
+        mix_wav_files(&mic_path, &loopback_path, &output_path).expect("mix");
+
+        let reader = hound::WavReader::open(&output_path).expect("open output");
+        assert_eq!(reader.spec().sample_rate, 16_000);
+    }
+
+    #[test]
     fn duration_ms_uses_frame_count() {
         assert_eq!(duration_ms_from_frames(16_000, 16_000), 1000);
         assert_eq!(duration_ms_from_frames(8_000, 16_000), 500);
@@ -668,5 +1273,22 @@ mod tests {
             .and_then(|name| name.to_str())
             .unwrap_or_default()
             .contains("transcribe-kit-live-"));
+    }
+
+    fn write_test_wav(path: &Path, sample_rate_hz: u32, channels: u16, samples: &[i16]) {
+        let mut writer =
+            hound::WavWriter::create(path, wav_spec(sample_rate_hz, channels)).expect("create wav");
+        for sample in samples {
+            writer.write_sample(*sample).expect("write sample");
+        }
+        writer.finalize().expect("finalize wav");
+    }
+
+    fn read_test_samples(path: &Path) -> Vec<i16> {
+        let mut reader = hound::WavReader::open(path).expect("open wav");
+        reader
+            .samples::<i16>()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("samples")
     }
 }

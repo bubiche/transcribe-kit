@@ -172,6 +172,8 @@ pub struct LiveRecordingResult {
     pub sample_rate_hz: u32,
     pub channels: u16,
     pub duration_ms: u64,
+    #[serde(default)]
+    pub is_dual_capture: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

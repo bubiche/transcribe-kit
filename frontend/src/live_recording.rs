@@ -683,6 +683,7 @@ mod tests {
             sample_rate_hz: 48_000,
             channels: 2,
             duration_ms: 5_200,
+            is_dual_capture: false,
         }));
 
         assert_eq!(transition.status.state, LiveRecordingState::Idle);
@@ -818,6 +819,7 @@ mod tests {
             sample_rate_hz: 48_000,
             channels: 2,
             duration_ms: 5_200,
+            is_dual_capture: false,
         });
 
         assert_eq!(source_name, "Desk Mic");
@@ -832,6 +834,7 @@ mod tests {
             sample_rate_hz: 48_000,
             channels: 2,
             duration_ms: 5_200,
+            is_dual_capture: false,
         });
         assert_eq!(source_name, "mic-1");
 
@@ -842,6 +845,7 @@ mod tests {
             sample_rate_hz: 48_000,
             channels: 2,
             duration_ms: 5_200,
+            is_dual_capture: false,
         });
         assert_eq!(fallback_name, "Live recording");
     }
@@ -867,6 +871,7 @@ mod tests {
             sample_rate_hz: 48_000,
             channels: 2,
             duration_ms: 5_200,
+            is_dual_capture: false,
         }
     }
 

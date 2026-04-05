@@ -83,7 +83,7 @@ pub fn list_input_devices() -> Result<Vec<AudioInputDeviceDescriptor>, InputDevi
     Ok(devices)
 }
 
-fn platform_supports_output_loopback() -> bool {
+pub fn platform_supports_output_loopback() -> bool {
     #[cfg(target_os = "windows")]
     {
         return true;
@@ -109,9 +109,7 @@ fn macos_version_at_least(major: u32, minor: u32) -> bool {
         .filter(|output| output.status.success())
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .and_then(|version| parse_macos_version(version.trim()))
-        .map(|(actual_major, actual_minor, _)| {
-            (actual_major, actual_minor) >= (major, minor)
-        })
+        .map(|(actual_major, actual_minor, _)| (actual_major, actual_minor) >= (major, minor))
         .unwrap_or(false)
 }
 
