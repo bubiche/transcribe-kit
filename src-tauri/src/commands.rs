@@ -108,8 +108,19 @@ pub fn start_live_transcription(
     live_recording_state: State<'_, live_recording::LiveRecordingManagerState>,
 ) -> Result<LiveRecordingStatus, String> {
     let settings = settings_store.load().map_err(|error| error.to_string())?;
+    let selected_input_device_id = settings.selected_input_device_id.as_deref();
+    let is_output_loopback = selected_input_device_id
+        .and_then(|selected_id| {
+            input_devices::list_input_devices()
+                .ok()?
+                .into_iter()
+                .find(|device| device.id == selected_id)
+                .map(|device| device.is_output_loopback)
+        })
+        .unwrap_or(false);
+
     live_recording_state
-        .start(&app, settings.selected_input_device_id.as_deref())
+        .start(&app, selected_input_device_id, is_output_loopback)
         .map_err(|error| error.to_string())
 }
 

@@ -100,13 +100,13 @@ pub(super) fn platform_meeting_guidance(platform: RuntimePlatform) -> PlatformMe
     match platform {
         RuntimePlatform::MacOS => PlatformMeetingGuidance {
             platform_label: "macOS",
-            title: "Meeting capture on macOS usually starts with a loopback-style input.",
-            body: "Look for a virtual loopback or other mixed input device created by your audio routing setup. Transcribe Kit does not directly grab speaker output here; it records the audio input you choose.",
+            title: "Meeting capture on macOS can use System Audio or a mixed input.",
+            body: "A System Audio source captures remote participants but not your own voice. For both sides, use a loopback or virtual cable input that mixes mic and speaker audio together.",
         },
         RuntimePlatform::Windows => PlatformMeetingGuidance {
             platform_label: "Windows",
-            title: "Meeting capture on Windows usually uses Stereo Mix, loopback, or virtual cable inputs.",
-            body: "If one of those inputs is available, select it for Meeting mix so the chosen input already contains both your voice and the call audio before recording starts.",
+            title: "Meeting capture on Windows can use System Audio or a mixed input.",
+            body: "A System Audio source captures remote participants but not your own voice. For both sides, use Stereo Mix, a loopback, or a virtual cable input that combines mic and speaker audio.",
         },
         RuntimePlatform::Linux => PlatformMeetingGuidance {
             platform_label: "Linux",
@@ -116,7 +116,7 @@ pub(super) fn platform_meeting_guidance(platform: RuntimePlatform) -> PlatformMe
         RuntimePlatform::Unknown => PlatformMeetingGuidance {
             platform_label: "This device",
             title: "Meeting capture works best with a mixed input exposed by the operating system.",
-            body: "Look for a loopback, monitor, Stereo Mix, or virtual cable style input. Transcribe Kit records whichever audio input source you select.",
+            body: "Look for a System Audio source, or a loopback, monitor, Stereo Mix, or virtual cable style input. Transcribe Kit records whichever audio source you select.",
         },
     }
 }
@@ -150,6 +150,14 @@ pub(super) fn build_meeting_readiness_hint(
     let device_kind = effective_device.map(classify_input_device);
 
     match (profile, device_kind) {
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::SystemAudio)) => {
+            MeetingReadinessHint {
+                title: "Partial: this captures remote participants but not your own voice.".to_string(),
+                body: "System Audio records what plays through the output device — typically the other side of the call. Your own voice goes through your microphone and is not included. For both sides, use a loopback or virtual cable input that mixes mic and speaker audio.".to_string(),
+                tone: MeetingReadinessTone::Caution,
+                device_kind,
+            }
+        }
         (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::VirtualLoopback)) => {
             MeetingReadinessHint {
                 title: "Yes: this looks like a strong meeting-mix input.".to_string(),
@@ -192,7 +200,11 @@ pub(super) fn build_meeting_readiness_hint(
         }
         (
             LiveCaptureProfile::MicrophoneOnly,
-            Some(InputDeviceKindHint::VirtualLoopback | InputDeviceKindHint::MonitorSource),
+            Some(
+                InputDeviceKindHint::VirtualLoopback
+                    | InputDeviceKindHint::MonitorSource
+                    | InputDeviceKindHint::SystemAudio,
+            ),
         ) => MeetingReadinessHint {
             title: "Maybe: the device could capture the meeting, but the profile is still set to microphone only.".to_string(),
             body: "Recording will still use this input, but switching the profile to Meeting mix makes the capture intent clearer and keeps future labeling honest.".to_string(),
@@ -239,6 +251,13 @@ pub(super) fn build_capture_behavior_summary(
     let device_kind = effective_device.map(classify_input_device);
 
     match (profile, device_kind) {
+        (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::SystemAudio)) => {
+            CaptureBehaviorSummary {
+                title: format!("Ready to record remote audio from {device_label}."),
+                body: "System Audio captures what plays through this output — typically the remote side of a call. Your own voice is not included because it goes through your microphone, not your speakers.".to_string(),
+                tone: MeetingReadinessTone::Caution,
+            }
+        }
         (LiveCaptureProfile::MeetingMix, Some(InputDeviceKindHint::VirtualLoopback)) => {
             CaptureBehaviorSummary {
                 title: format!("Ready to record from {device_label} as a meeting mix."),
@@ -277,7 +296,11 @@ pub(super) fn build_capture_behavior_summary(
         }
         (
             LiveCaptureProfile::MicrophoneOnly,
-            Some(InputDeviceKindHint::VirtualLoopback | InputDeviceKindHint::MonitorSource),
+            Some(
+                InputDeviceKindHint::VirtualLoopback
+                    | InputDeviceKindHint::MonitorSource
+                    | InputDeviceKindHint::SystemAudio,
+            ),
         ) => CaptureBehaviorSummary {
             title: format!("Ready to record from {device_label}."),
             body: "Because this input looks mixed, it may include the whole meeting even though the profile is still set to Microphone only. Switch to Meeting mix if that is your intent.".to_string(),
@@ -322,10 +345,10 @@ pub(super) fn build_meeting_troubleshooting_steps(
 
     steps.push(match platform {
         RuntimePlatform::MacOS => {
-            "If no meeting-style input appears on macOS, create or enable a virtual loopback or other mixed input in your audio routing setup, then reopen Settings.".to_string()
+            "On macOS 14.2+, System Audio outputs should appear automatically. If they do not, check system audio permissions in System Settings > Privacy & Security, or set up a virtual loopback input as a fallback.".to_string()
         }
         RuntimePlatform::Windows => {
-            "If no meeting-style input appears on Windows, check whether Stereo Mix, a loopback device, or a virtual cable input can be enabled in your audio setup first.".to_string()
+            "On Windows, System Audio outputs should appear automatically for loopback capture. If you prefer a different setup, check whether Stereo Mix, a loopback device, or a virtual cable input can be enabled in your audio settings.".to_string()
         }
         RuntimePlatform::Linux => {
             "If no meeting-style input appears on Linux, expose a monitor source or virtual input through PipeWire or PulseAudio, then refresh your device list.".to_string()
@@ -351,6 +374,7 @@ mod tests {
             channels: Some(2),
             sample_rate_hz: Some(48_000),
             is_default: false,
+            is_output_loopback: false,
         }
     }
 
@@ -380,6 +404,22 @@ mod tests {
 
         assert_eq!(hint.tone, MeetingReadinessTone::Warning);
         assert!(hint.title.starts_with("No:"));
+    }
+
+    #[test]
+    fn meeting_mix_hint_cautions_system_audio_captures_only_remote() {
+        let mut device = sample_device("Built-in Output (System Audio)");
+        device.is_output_loopback = true;
+        let selected_id = device.id.clone();
+        let hint = build_meeting_readiness_hint(
+            LiveCaptureProfile::MeetingMix,
+            Some(selected_id.as_str()),
+            &[device],
+        );
+
+        assert_eq!(hint.tone, MeetingReadinessTone::Caution);
+        assert!(hint.title.starts_with("Partial:"));
+        assert!(hint.body.contains("not included"));
     }
 
     #[test]

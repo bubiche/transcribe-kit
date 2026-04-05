@@ -4,5 +4,7 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>Transcribe Kit needs microphone access to capture live dictation and push-to-talk recordings.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Transcribe Kit needs system audio access to capture meeting audio for transcription.</string>
 </dict>
 </plist>

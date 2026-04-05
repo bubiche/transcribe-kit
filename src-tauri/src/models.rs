@@ -95,6 +95,8 @@ pub struct AudioInputDeviceDescriptor {
     pub channels: Option<u16>,
     pub sample_rate_hz: Option<u32>,
     pub is_default: bool,
+    #[serde(default)]
+    pub is_output_loopback: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

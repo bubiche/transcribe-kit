@@ -506,6 +506,12 @@ body {
   background: rgba(255, 249, 235, 0.94);
 }
 
+.device-kind-chip-system-audio {
+  color: #0b5f83;
+  border-color: rgba(40, 127, 166, 0.24);
+  background: rgba(228, 245, 252, 0.95);
+}
+
 .device-kind-chip-unknown {
   color: var(--muted);
   border-color: rgba(93, 114, 105, 0.18);

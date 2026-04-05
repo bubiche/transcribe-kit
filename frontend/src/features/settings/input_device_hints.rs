@@ -5,6 +5,7 @@ pub(super) enum InputDeviceKindHint {
     PhysicalMic,
     VirtualLoopback,
     MonitorSource,
+    SystemAudio,
     Unknown,
 }
 
@@ -14,6 +15,7 @@ impl InputDeviceKindHint {
             Self::PhysicalMic => "Mic",
             Self::VirtualLoopback => "Loopback",
             Self::MonitorSource => "Monitor",
+            Self::SystemAudio => "System Audio",
             Self::Unknown => "Unknown",
         }
     }
@@ -23,12 +25,17 @@ impl InputDeviceKindHint {
             Self::PhysicalMic => "mic",
             Self::VirtualLoopback => "loopback",
             Self::MonitorSource => "monitor",
+            Self::SystemAudio => "system-audio",
             Self::Unknown => "unknown",
         }
     }
 }
 
 pub(super) fn classify_input_device(device: &AudioInputDeviceDescriptor) -> InputDeviceKindHint {
+    if device.is_output_loopback {
+        return InputDeviceKindHint::SystemAudio;
+    }
+
     let label = device.label.to_lowercase();
     let manufacturer = device
         .manufacturer
@@ -108,6 +115,9 @@ pub(super) fn input_device_kind_summary(kind: InputDeviceKindHint) -> &'static s
         InputDeviceKindHint::PhysicalMic => "Detected as a mic-style input.",
         InputDeviceKindHint::VirtualLoopback => "Detected as a loopback or virtual input.",
         InputDeviceKindHint::MonitorSource => "Detected as a monitor-style input.",
+        InputDeviceKindHint::SystemAudio => {
+            "This is a system audio output. It captures sound playing through the device but does not include your microphone."
+        }
         InputDeviceKindHint::Unknown => "The input type is not obvious from the device name.",
     }
 }
@@ -165,6 +175,7 @@ mod tests {
             channels: Some(2),
             sample_rate_hz: Some(48_000),
             is_default: false,
+            is_output_loopback: false,
         }
     }
 
@@ -192,6 +203,16 @@ mod tests {
         assert_eq!(
             classify_input_device(&device),
             InputDeviceKindHint::PhysicalMic
+        );
+    }
+
+    #[test]
+    fn classifies_output_loopback_devices_as_system_audio() {
+        let mut device = sample_device("Built-in Output");
+        device.is_output_loopback = true;
+        assert_eq!(
+            classify_input_device(&device),
+            InputDeviceKindHint::SystemAudio
         );
     }
 

@@ -102,6 +102,7 @@ impl LiveRecordingManagerState {
         &self,
         app: &AppHandle<R>,
         selected_input_device_id: Option<&str>,
+        is_output_loopback: bool,
     ) -> Result<LiveRecordingStatus, LiveRecordingError> {
         let mut guard = self.inner.lock().unwrap();
 
@@ -109,7 +110,7 @@ impl LiveRecordingManagerState {
             return Err(LiveRecordingError::AlreadyRecording);
         }
 
-        let active = ActiveRecording::start(selected_input_device_id)?;
+        let active = ActiveRecording::start(selected_input_device_id, is_output_loopback)?;
         let status = active.status();
         guard.active = Some(active);
         drop(guard);
@@ -139,14 +140,19 @@ impl LiveRecordingManagerState {
 }
 
 impl ActiveRecording {
-    fn start(selected_input_device_id: Option<&str>) -> Result<Self, LiveRecordingError> {
+    fn start(
+        selected_input_device_id: Option<&str>,
+        is_output_loopback: bool,
+    ) -> Result<Self, LiveRecordingError> {
         let resolved_device = resolve_input_device(selected_input_device_id)?;
-        let supported_config = resolved_device
-            .device
-            .default_input_config()
-            .map_err(|error| {
-                LiveRecordingError::DefaultConfig(with_platform_hint(error.to_string()))
-            })?;
+        let supported_config = if is_output_loopback {
+            resolved_device.device.default_output_config()
+        } else {
+            resolved_device.device.default_input_config()
+        }
+        .map_err(|error| {
+            LiveRecordingError::DefaultConfig(with_platform_hint(error.to_string()))
+        })?;
 
         if supported_config.sample_format().is_dsd() {
             return Err(LiveRecordingError::UnsupportedSampleFormat(
