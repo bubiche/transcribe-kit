@@ -13,11 +13,15 @@ use crate::{
         ModelStatus, ProviderMode, SaveSettingsRequest, StartFileTranscriptionRequest,
         TranscribeLiveRecordingRequest, TranscriptResult, TranscriptionStreamEvent,
     },
-    providers::local_whisper,
+    providers::{
+        api_openai_compatible::{resolve_effective_model_name, ApiCredentials},
+        local_whisper,
+    },
     settings::SettingsStore,
     transcription::{
         cleanup_temporary_live_recording, file_source_name, finalize_live_transcription_result,
-        live_source_name, transcribe_local_audio_path, LocalTranscriptionMetadata,
+        live_source_name, transcribe_api_audio_path, transcribe_local_audio_path,
+        TranscriptionMetadata,
     },
 };
 
@@ -236,22 +240,43 @@ pub async fn start_file_transcription(
 ) -> Result<TranscriptResult, String> {
     let file_path = PathBuf::from(&request.file_path);
     let source_name = file_source_name(file_path.as_path());
-    let model_id = local_model_id(&settings_store, "File import transcription")?;
-    let engine_cache = Arc::clone(&engine_state.inner);
+    let settings = settings_store.load().map_err(|e| e.to_string())?;
 
-    transcribe_local_audio_path(
-        engine_cache,
-        model_id,
-        file_path,
-        LocalTranscriptionMetadata {
-            input_type: InputType::File,
-            live_capture_profile: None,
-            source_name,
-            duration_ms: None,
-        },
-        on_update,
-    )
-    .await
+    match settings.provider_mode {
+        ProviderMode::Local => {
+            let engine_cache = Arc::clone(&engine_state.inner);
+            transcribe_local_audio_path(
+                engine_cache,
+                settings.local_model_id,
+                file_path,
+                TranscriptionMetadata {
+                    input_type: InputType::File,
+                    live_capture_profile: None,
+                    source_name,
+                    duration_ms: None,
+                },
+                on_update,
+            )
+            .await
+        }
+        ProviderMode::Api => {
+            let (model_name, credentials) = load_api_credentials(&settings, &settings_store)?;
+
+            transcribe_api_audio_path(
+                file_path,
+                model_name,
+                credentials,
+                TranscriptionMetadata {
+                    input_type: InputType::File,
+                    live_capture_profile: None,
+                    source_name,
+                    duration_ms: None,
+                },
+                on_update,
+            )
+            .await
+        }
+    }
 }
 
 #[tauri::command]
@@ -263,27 +288,47 @@ pub async fn transcribe_live_recording(
 ) -> Result<TranscriptResult, String> {
     let file_path = PathBuf::from(&request.file_path);
     let cleanup_path = file_path.clone();
-    let result = match local_model_id(&settings_store, "Live recording transcription") {
-        Ok(model_id) => {
+    let settings = settings_store.load().map_err(|e| e.to_string())?;
+
+    let source_name = Some(live_source_name(
+        &request.input_device_label,
+        request.input_device_id.as_deref(),
+    ));
+
+    let result = match settings.provider_mode {
+        ProviderMode::Local => {
             let engine_cache = Arc::clone(&engine_state.inner);
             transcribe_local_audio_path(
                 engine_cache,
-                model_id,
+                settings.local_model_id,
                 file_path,
-                LocalTranscriptionMetadata {
+                TranscriptionMetadata {
                     input_type: InputType::Live,
                     live_capture_profile: Some(request.live_capture_profile),
-                    source_name: Some(live_source_name(
-                        &request.input_device_label,
-                        request.input_device_id.as_deref(),
-                    )),
+                    source_name,
                     duration_ms: Some(request.duration_ms),
                 },
                 on_update,
             )
             .await
         }
-        Err(error) => Err(error),
+        ProviderMode::Api => {
+            let (model_name, credentials) = load_api_credentials(&settings, &settings_store)?;
+
+            transcribe_api_audio_path(
+                file_path,
+                model_name,
+                credentials,
+                TranscriptionMetadata {
+                    input_type: InputType::Live,
+                    live_capture_profile: Some(request.live_capture_profile),
+                    source_name,
+                    duration_ms: Some(request.duration_ms),
+                },
+                on_update,
+            )
+            .await
+        }
     };
 
     let cleanup_result = cleanup_temporary_live_recording(cleanup_path.as_path());
@@ -303,17 +348,21 @@ pub async fn preload_local_model(
         .map_err(|e| format!("Model preload task failed: {e}"))?
 }
 
-fn local_model_id(
-    settings_store: &State<'_, SettingsStore>,
-    transcription_label: &str,
-) -> Result<String, String> {
-    let settings = settings_store.load().map_err(|e| e.to_string())?;
-
-    if settings.provider_mode != ProviderMode::Local {
-        return Err(format!(
-            "{transcription_label} is only wired up for Local Whisper right now. Switch the provider in Settings to continue."
-        ));
-    }
-
-    Ok(settings.local_model_id)
+fn load_api_credentials(
+    settings: &AppSettings,
+    settings_store: &SettingsStore,
+) -> Result<(String, ApiCredentials), String> {
+    let model_name =
+        resolve_effective_model_name(&settings.api_model_id, &settings.api_custom_model_name)
+            .map_err(|e| e.to_string())?;
+    let api_key = settings_store
+        .get_api_key(&settings.api_base_url)
+        .map_err(|e| e.to_string())?;
+    Ok((
+        model_name,
+        ApiCredentials {
+            api_key,
+            base_url: settings.api_base_url.clone(),
+        },
+    ))
 }

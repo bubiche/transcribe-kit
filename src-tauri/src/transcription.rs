@@ -7,10 +7,12 @@ use tauri::ipc::Channel;
 use crate::audio;
 use crate::engine::get_or_load_engine;
 use crate::models::{InputType, LiveCaptureProfile, TranscriptResult, TranscriptionStreamEvent};
+use crate::providers::api_openai_compatible::ApiCredentials;
 use crate::providers::local_whisper::WhisperEngine;
+use crate::providers::transcribe_api_audio_file;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LocalTranscriptionMetadata {
+pub(crate) struct TranscriptionMetadata {
     pub input_type: InputType,
     pub live_capture_profile: Option<LiveCaptureProfile>,
     pub source_name: Option<String>,
@@ -21,7 +23,7 @@ pub(crate) async fn transcribe_local_audio_path(
     engine_cache: Arc<Mutex<Option<WhisperEngine>>>,
     model_id: String,
     file_path: PathBuf,
-    metadata: LocalTranscriptionMetadata,
+    metadata: TranscriptionMetadata,
     on_update: Channel<TranscriptionStreamEvent>,
 ) -> Result<TranscriptResult, String> {
     let on_update = Arc::new(on_update);
@@ -43,7 +45,7 @@ fn transcribe_local_audio_path_blocking(
     engine_cache: &Arc<Mutex<Option<WhisperEngine>>>,
     model_id: &str,
     file_path: &Path,
-    metadata: LocalTranscriptionMetadata,
+    metadata: TranscriptionMetadata,
     on_update: &Arc<Channel<TranscriptionStreamEvent>>,
 ) -> Result<TranscriptResult, String> {
     let engine = get_or_load_engine(engine_cache, model_id)?;
@@ -70,6 +72,33 @@ fn transcribe_local_audio_path_blocking(
         result,
         metadata,
         decoded_audio.duration_ms,
+    ))
+}
+
+pub(crate) async fn transcribe_api_audio_path(
+    file_path: PathBuf,
+    model_name: String,
+    credentials: ApiCredentials,
+    metadata: TranscriptionMetadata,
+    on_update: Channel<TranscriptionStreamEvent>,
+) -> Result<TranscriptResult, String> {
+    let _ = on_update.send(TranscriptionStreamEvent::Progress {
+        progress_percent: 0,
+    });
+
+    let result = transcribe_api_audio_file(&file_path, &model_name, &credentials)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = on_update.send(TranscriptionStreamEvent::Progress {
+        progress_percent: 100,
+    });
+
+    let api_duration_ms = result.source.duration_ms;
+    Ok(apply_transcription_metadata(
+        result,
+        metadata,
+        api_duration_ms,
     ))
 }
 
@@ -106,7 +135,7 @@ pub(crate) fn cleanup_temporary_live_recording(file_path: &Path) -> Result<(), S
 
 fn apply_transcription_metadata(
     mut result: TranscriptResult,
-    metadata: LocalTranscriptionMetadata,
+    metadata: TranscriptionMetadata,
     decoded_duration_ms: Option<u64>,
 ) -> TranscriptResult {
     result.source.input_type = metadata.input_type;
@@ -142,7 +171,7 @@ pub(crate) fn finalize_live_transcription_result(
 mod tests {
     use super::{
         apply_transcription_metadata, cleanup_temporary_live_recording, file_source_name,
-        finalize_live_transcription_result, live_source_name, LocalTranscriptionMetadata,
+        finalize_live_transcription_result, live_source_name, TranscriptionMetadata,
     };
     use std::{
         fs,
@@ -199,7 +228,7 @@ mod tests {
     fn apply_transcription_metadata_preserves_live_profile_and_explicit_metadata() {
         let result = apply_transcription_metadata(
             sample_transcript_result(),
-            LocalTranscriptionMetadata {
+            TranscriptionMetadata {
                 input_type: InputType::Live,
                 live_capture_profile: Some(LiveCaptureProfile::MeetingMix),
                 source_name: Some("Desk Mic".to_string()),
@@ -221,7 +250,7 @@ mod tests {
     fn apply_transcription_metadata_falls_back_to_decoded_duration() {
         let result = apply_transcription_metadata(
             sample_transcript_result(),
-            LocalTranscriptionMetadata {
+            TranscriptionMetadata {
                 input_type: InputType::File,
                 live_capture_profile: None,
                 source_name: Some("note.wav".to_string()),
