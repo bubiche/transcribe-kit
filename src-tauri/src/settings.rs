@@ -225,6 +225,10 @@ impl SettingsStore {
         }
     }
 
+    pub fn get_api_key(&self, base_url: &str) -> Result<String, SettingsError> {
+        map_retrieved_api_key(self.entry(base_url).get_password())
+    }
+
     fn set_api_key(&self, base_url: &str, api_key: &str) -> Result<(), SettingsError> {
         self.entry(base_url).set_password(api_key)?;
         Ok(())
@@ -326,8 +330,23 @@ fn credential_account(base_url: &str) -> String {
     format!("openai-compatible::{}", normalize_base_url(base_url))
 }
 
+fn map_retrieved_api_key(result: Result<String, keyring::Error>) -> Result<String, SettingsError> {
+    match result {
+        Ok(password) if password.trim().is_empty() => Err(SettingsError::Validation(
+            "No API key is stored for the configured API base URL.".to_string(),
+        )),
+        Ok(password) => Ok(password.trim().to_string()),
+        Err(keyring::Error::NoEntry) => Err(SettingsError::Validation(
+            "No API key is stored for the configured API base URL.".to_string(),
+        )),
+        Err(error) => Err(SettingsError::Keyring(error)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use tempfile::TempDir;
 
     use super::*;
@@ -336,6 +355,14 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = SettingsStore::with_path(temp_dir.path().join("settings.json"));
         (temp_dir, store)
+    }
+
+    fn unique_base_url(label: &str) -> String {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        format!("https://{label}-{nonce}.example.invalid")
     }
 
     #[test]
@@ -489,5 +516,50 @@ mod tests {
         );
 
         assert!(matches!(result, Err(SettingsError::Validation(_))));
+    }
+
+    #[test]
+    fn get_api_key_returns_validation_error_when_missing() {
+        let (_temp_dir, store) = temp_store();
+        let base_url = unique_base_url("missing-key");
+
+        let result = store.get_api_key(&base_url);
+
+        match result {
+            Err(SettingsError::Validation(message)) => {
+                assert!(message.contains("No API key is stored"));
+            }
+            other => panic!("expected missing-key validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_api_key_mapping_returns_stored_value() {
+        let stored_key =
+            map_retrieved_api_key(Ok("super-secret".to_string())).expect("read stored key");
+        assert_eq!(stored_key, "super-secret");
+    }
+
+    #[test]
+    fn get_api_key_mapping_trims_stored_value() {
+        let stored_key =
+            map_retrieved_api_key(Ok("  super-secret  ".to_string())).expect("read stored key");
+        assert_eq!(stored_key, "super-secret");
+    }
+
+    #[test]
+    fn get_api_key_mapping_preserves_keyring_errors() {
+        let result = map_retrieved_api_key(Err(keyring::Error::Invalid(
+            "account".to_string(),
+            "invalid".to_string(),
+        )));
+
+        match result {
+            Err(SettingsError::Keyring(keyring::Error::Invalid(account, reason))) => {
+                assert_eq!(account, "account");
+                assert_eq!(reason, "invalid");
+            }
+            other => panic!("expected keyring invalid error, got {other:?}"),
+        }
     }
 }

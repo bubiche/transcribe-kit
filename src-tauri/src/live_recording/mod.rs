@@ -1141,5 +1141,4 @@ mod tests {
         let message = dual_capture_fallback_message(&LiveRecordingError::NoOutputDevice);
         assert!(message.contains("microphone-only recording"));
     }
-
 }

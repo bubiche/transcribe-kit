@@ -27,7 +27,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-shell = "2"
 thiserror = "1"
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["multipart", "rustls"] }
 tokio = { version = "1", features = ["rt"] }
 whisper-rs = "0.16"
 

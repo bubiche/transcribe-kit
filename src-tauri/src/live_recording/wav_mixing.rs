@@ -140,7 +140,9 @@ pub(super) fn wav_is_silent(path: &Path) -> bool {
     if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
         return false;
     }
-    reader.samples::<i16>().all(|s| s.map(|v| v == 0).unwrap_or(true))
+    reader
+        .samples::<i16>()
+        .all(|s| s.map(|v| v == 0).unwrap_or(true))
 }
 
 pub(super) fn wav_spec(sample_rate_hz: u32, channels: u16) -> hound::WavSpec {
