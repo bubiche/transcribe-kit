@@ -364,6 +364,95 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reset_job_feedback_preserves_succeeded_state() {
+        let controller = TranscriptionController::new();
+        controller.job_status.set(TranscriptionJobStatus {
+            state: TranscriptionJobState::Succeeded,
+            input_type: InputType::File,
+            source_name: Some("note.wav".to_string()),
+            message: Some("Transcript ready for review.".to_string()),
+        });
+
+        controller.reset_job_feedback();
+
+        assert_eq!(
+            controller.job_status.get().state,
+            TranscriptionJobState::Succeeded
+        );
+        assert_eq!(controller.job_status.get().message, None);
+    }
+
+    #[test]
+    fn reset_job_feedback_resets_failed_state_to_idle() {
+        let controller = TranscriptionController::new();
+        controller.job_status.set(TranscriptionJobStatus {
+            state: TranscriptionJobState::Failed,
+            input_type: InputType::File,
+            source_name: None,
+            message: Some("API key missing".to_string()),
+        });
+
+        controller.reset_job_feedback();
+
+        assert_eq!(
+            controller.job_status.get().state,
+            TranscriptionJobState::Idle
+        );
+        assert_eq!(controller.job_status.get().message, None);
+    }
+
+    #[test]
+    fn completion_nonce_increments_across_successive_jobs() {
+        let controller = TranscriptionController::new();
+        assert_eq!(controller.completion_nonce.get(), 0);
+
+        controller.complete_job(sample_result(
+            InputType::File,
+            Some("a.wav"),
+            "first",
+            vec![],
+        ));
+        assert_eq!(controller.completion_nonce.get(), 1);
+
+        controller.complete_job(sample_result(
+            InputType::Live,
+            Some("Mic"),
+            "second",
+            vec![],
+        ));
+        assert_eq!(controller.completion_nonce.get(), 2);
+    }
+
+    #[test]
+    fn complete_job_sets_api_provider_metadata_correctly() {
+        let controller = TranscriptionController::new();
+        controller.start_file_job("clip.mp3");
+
+        let result = TranscriptResult {
+            text: "api transcript".to_string(),
+            segments: vec![],
+            source: TranscriptionSource {
+                provider: "openai-compatible".to_string(),
+                model_id: "gpt-4o-mini-transcribe".to_string(),
+                input_type: InputType::File,
+                live_capture_profile: None,
+                source_name: Some("clip.mp3".to_string()),
+                duration_ms: Some(5_000),
+            },
+            post_processed_text: None,
+        };
+
+        controller.complete_job(result);
+
+        let transcript = controller.transcript.get().expect("should have transcript");
+        assert_eq!(transcript.source.provider, "openai-compatible");
+        assert_eq!(transcript.source.model_id, "gpt-4o-mini-transcribe");
+        assert_eq!(transcript.text, "api transcript");
+        assert!(transcript.segments.is_empty());
+        assert!(!controller.is_transcribing.get());
+    }
+
     fn sample_result(
         input_type: InputType,
         source_name: Option<&str>,

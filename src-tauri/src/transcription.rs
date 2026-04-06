@@ -408,6 +408,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn apply_transcription_metadata_leaves_duration_none_when_both_sources_missing() {
+        let result = apply_transcription_metadata(
+            sample_transcript_result(),
+            TranscriptionMetadata {
+                input_type: InputType::File,
+                live_capture_profile: None,
+                source_name: Some("clip.mp3".to_string()),
+                duration_ms: None,
+            },
+            None,
+        );
+
+        assert_eq!(result.source.duration_ms, None);
+    }
+
+    #[test]
+    fn file_source_name_returns_none_for_root_path() {
+        let path = PathBuf::from("/");
+        assert_eq!(file_source_name(path.as_path()), None);
+    }
+
     fn sample_transcript_result() -> TranscriptResult {
         TranscriptResult {
             text: "hello world".to_string(),

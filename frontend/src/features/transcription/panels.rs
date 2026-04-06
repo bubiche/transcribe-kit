@@ -749,4 +749,51 @@ mod tests {
             Some(3),
         ));
     }
+
+    #[test]
+    fn should_focus_live_transcript_rejects_file_input_type_in_result() {
+        let file_result = TranscriptResult {
+            text: "file transcript".to_string(),
+            segments: Vec::new(),
+            source: crate::tauri_api::TranscriptionSource {
+                provider: "openai-compatible".to_string(),
+                model_id: "gpt-4o-mini-transcribe".to_string(),
+                input_type: InputType::File,
+                live_capture_profile: None,
+                source_name: Some("note.wav".to_string()),
+                duration_ms: Some(2_000),
+            },
+            post_processed_text: None,
+        };
+
+        let live_status = TranscriptionJobStatus {
+            state: TranscriptionJobState::Succeeded,
+            input_type: InputType::Live,
+            source_name: Some("Desk Mic".to_string()),
+            message: Some("Transcript ready for review.".to_string()),
+        };
+
+        assert!(
+            !should_focus_live_transcript(
+                true,
+                false,
+                &live_status,
+                Some(&file_result),
+                3,
+                Some(2),
+            ),
+            "should not focus when result has File input type"
+        );
+    }
+
+    #[test]
+    fn source_name_fallback_api_provider_uses_same_labels() {
+        // API transcripts should use the same source labels as local.
+        // This verifies that the label logic is provider-neutral.
+        assert_eq!(source_name_fallback(InputType::File, None), "Imported file");
+        assert_eq!(
+            source_name_fallback(InputType::Live, Some(LiveCaptureProfile::MicrophoneOnly)),
+            "Live microphone note"
+        );
+    }
 }

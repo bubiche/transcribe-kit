@@ -300,9 +300,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        build_multipart_upload_spec, ensure_supported_audio_file_format, infer_audio_mime_type,
-        is_api_supported_audio_file, map_http_error, network_error_message, parse_json_response,
-        resolve_effective_model_name,
+        build_multipart_upload_spec, ensure_supported_audio_file_format, extract_api_error_message,
+        infer_audio_mime_type, is_api_supported_audio_file, map_http_error, network_error_message,
+        parse_json_response, resolve_effective_model_name, transcription_endpoint, ApiCredentials,
     };
 
     #[test]
@@ -422,6 +422,163 @@ mod tests {
 
         let generic = network_error_message(false, false, "io error");
         assert!(generic.contains("Network error"));
+    }
+
+    // ---- ApiCredentials::validate() ----
+
+    #[test]
+    fn api_credentials_rejects_empty_key() {
+        let creds = ApiCredentials {
+            api_key: "   ".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+        };
+        assert_eq!(creds.validate(), Err("API key is required."));
+    }
+
+    #[test]
+    fn api_credentials_rejects_invalid_base_url_scheme() {
+        let creds = ApiCredentials {
+            api_key: "sk-test".to_string(),
+            base_url: "ftp://api.openai.com/v1".to_string(),
+        };
+        assert_eq!(
+            creds.validate(),
+            Err("Base URL must start with http:// or https://")
+        );
+    }
+
+    #[test]
+    fn api_credentials_accepts_valid_configuration() {
+        let https = ApiCredentials {
+            api_key: "sk-test-key".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+        };
+        assert_eq!(https.validate(), Ok(()));
+
+        let http = ApiCredentials {
+            api_key: "key".to_string(),
+            base_url: "http://localhost:8080".to_string(),
+        };
+        assert_eq!(http.validate(), Ok(()));
+    }
+
+    // ---- transcription_endpoint() ----
+
+    #[test]
+    fn transcription_endpoint_appends_path_to_base_url() {
+        assert_eq!(
+            transcription_endpoint("https://api.openai.com/v1"),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+    }
+
+    #[test]
+    fn transcription_endpoint_trims_trailing_slash() {
+        assert_eq!(
+            transcription_endpoint("https://api.openai.com/v1/"),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+    }
+
+    #[test]
+    fn transcription_endpoint_works_with_custom_base_url() {
+        assert_eq!(
+            transcription_endpoint("http://localhost:8080/v1"),
+            "http://localhost:8080/v1/audio/transcriptions"
+        );
+    }
+
+    // ---- extract_api_error_message() ----
+
+    #[test]
+    fn extract_api_error_message_extracts_nested_error_message() {
+        let body = r#"{"error":{"message":"Invalid API key provided"}}"#;
+        assert_eq!(
+            extract_api_error_message(body),
+            Some("Invalid API key provided".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_api_error_message_falls_back_to_top_level_message() {
+        let body = r#"{"message":"Rate limit exceeded"}"#;
+        assert_eq!(
+            extract_api_error_message(body),
+            Some("Rate limit exceeded".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_api_error_message_returns_none_for_unparseable_body() {
+        assert_eq!(extract_api_error_message("not json at all"), None);
+        assert_eq!(extract_api_error_message(""), None);
+    }
+
+    #[test]
+    fn extract_api_error_message_returns_none_for_empty_message_fields() {
+        assert_eq!(
+            extract_api_error_message(r#"{"error":{"message":""}}"#),
+            None
+        );
+        assert_eq!(extract_api_error_message(r#"{"message":"  "}"#), None);
+    }
+
+    // ---- parse_json_response() error cases ----
+
+    #[test]
+    fn parse_json_response_rejects_malformed_json() {
+        let error = parse_json_response("not valid json", "model")
+            .expect_err("malformed json should fail")
+            .to_string();
+        assert!(error.contains("unexpected response format"));
+    }
+
+    #[test]
+    fn parse_json_response_defaults_to_empty_text_when_field_missing() {
+        let body = r#"{}"#;
+        let result = parse_json_response(body, "model").expect("should parse with default");
+        assert_eq!(result.text, "");
+    }
+
+    // ---- additional edge cases ----
+
+    #[test]
+    fn is_api_supported_audio_file_handles_uppercase_extensions() {
+        assert!(is_api_supported_audio_file(Path::new("clip.WAV")));
+        assert!(is_api_supported_audio_file(Path::new("clip.Mp3")));
+        assert!(!is_api_supported_audio_file(Path::new("clip.FLAC")));
+    }
+
+    #[test]
+    fn ensure_supported_format_shows_extension_in_flac_error() {
+        let error = ensure_supported_audio_file_format(Path::new("recording.flac"))
+            .expect_err("flac should fail")
+            .to_string();
+        assert!(error.contains(".flac"));
+        assert!(error.contains("not supported"));
+    }
+
+    #[test]
+    fn ensure_supported_format_handles_file_without_extension() {
+        let error = ensure_supported_audio_file_format(Path::new("noextension"))
+            .expect_err("no extension should fail")
+            .to_string();
+        assert!(error.contains("unknown file extension"));
+    }
+
+    #[test]
+    fn infer_audio_mime_type_covers_all_supported_formats() {
+        assert_eq!(infer_audio_mime_type(Path::new("a.wav")), "audio/wav");
+        assert_eq!(infer_audio_mime_type(Path::new("a.mp3")), "audio/mpeg");
+        assert_eq!(infer_audio_mime_type(Path::new("a.mpeg")), "audio/mpeg");
+        assert_eq!(infer_audio_mime_type(Path::new("a.mpga")), "audio/mpeg");
+        assert_eq!(infer_audio_mime_type(Path::new("a.m4a")), "audio/mp4");
+        assert_eq!(infer_audio_mime_type(Path::new("a.mp4")), "audio/mp4");
+        assert_eq!(infer_audio_mime_type(Path::new("a.webm")), "audio/webm");
+        assert_eq!(
+            infer_audio_mime_type(Path::new("a.ogg")),
+            "application/octet-stream"
+        );
     }
 
     #[test]
