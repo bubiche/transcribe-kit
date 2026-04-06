@@ -90,7 +90,7 @@ impl TranscriptionController {
                     state: TranscriptionJobState::Running,
                     input_type,
                     source_name,
-                    message: Some("Receiving transcript segments from Whisper...".to_string()),
+                    message: Some("Receiving transcript segments...".to_string()),
                 });
             }
         }
@@ -245,7 +245,7 @@ mod tests {
         );
         assert_eq!(
             controller.job_status.get().message.as_deref(),
-            Some("Receiving transcript segments from Whisper...")
+            Some("Receiving transcript segments...")
         );
         assert_eq!(controller.job_status.get().input_type, InputType::Live);
     }

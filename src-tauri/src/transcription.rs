@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::ipc::Channel;
 
@@ -10,6 +11,9 @@ use crate::models::{InputType, LiveCaptureProfile, TranscriptResult, Transcripti
 use crate::providers::api_openai_compatible::ApiCredentials;
 use crate::providers::local_whisper::WhisperEngine;
 use crate::providers::transcribe_api_audio_file;
+
+/// 24 MB — leaves 1 MB margin below OpenAI's 25 MB upload limit.
+const API_UPLOAD_SIZE_LIMIT: u64 = 24 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TranscriptionMetadata {
@@ -86,9 +90,23 @@ pub(crate) async fn transcribe_api_audio_path(
         progress_percent: 0,
     });
 
-    let result = transcribe_api_audio_file(&file_path, &model_name, &credentials)
+    // Compress large files to MP3 before uploading to stay within the API size limit.
+    let (upload_path, compressed_temp) = {
+        let path = file_path.clone();
+        tokio::task::spawn_blocking(move || prepare_api_upload_file(&path))
+            .await
+            .map_err(|e| format!("Audio compression task failed: {e}"))?
+    }?;
+
+    let result = transcribe_api_audio_file(&upload_path, &model_name, &credentials)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string());
+
+    if let Some(ref temp_path) = compressed_temp {
+        let _ = std::fs::remove_file(temp_path);
+    }
+
+    let result = result?;
 
     let _ = on_update.send(TranscriptionStreamEvent::Progress {
         progress_percent: 100,
@@ -133,6 +151,31 @@ pub(crate) fn cleanup_temporary_live_recording(file_path: &Path) -> Result<(), S
     }
 }
 
+fn prepare_api_upload_file(file_path: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let file_size = std::fs::metadata(file_path)
+        .map_err(|e| format!("Could not read the audio file: {e}"))?
+        .len();
+
+    if file_size <= API_UPLOAD_SIZE_LIMIT {
+        return Ok((file_path.to_path_buf(), None));
+    }
+
+    let compressed_path = api_compressed_temp_path();
+    audio::encode_mp3_for_upload(file_path, &compressed_path).map_err(|e| e.to_string())?;
+
+    let cloned = compressed_path.clone();
+    Ok((compressed_path, Some(cloned)))
+}
+
+fn api_compressed_temp_path() -> PathBuf {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    std::env::temp_dir().join(format!("transcribe-kit-upload-{timestamp_ms}-{pid}.mp3"))
+}
+
 fn apply_transcription_metadata(
     mut result: TranscriptResult,
     metadata: TranscriptionMetadata,
@@ -171,7 +214,8 @@ pub(crate) fn finalize_live_transcription_result(
 mod tests {
     use super::{
         apply_transcription_metadata, cleanup_temporary_live_recording, file_source_name,
-        finalize_live_transcription_result, live_source_name, TranscriptionMetadata,
+        finalize_live_transcription_result, live_source_name, prepare_api_upload_file,
+        TranscriptionMetadata, API_UPLOAD_SIZE_LIMIT,
     };
     use std::{
         fs,
@@ -299,6 +343,69 @@ mod tests {
             .as_nanos();
 
         std::env::temp_dir().join(format!("transcribe-kit-{label}-{unique}.tmp"))
+    }
+
+    #[test]
+    fn prepare_api_upload_file_passes_through_small_files() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let small_path = temp_dir.path().join("small.wav");
+        fs::write(&small_path, b"RIFF\x00\x00\x00\x00WAVEfmt ").expect("write small file");
+
+        let (upload_path, compressed) = prepare_api_upload_file(&small_path).expect("prepare");
+
+        assert_eq!(upload_path, small_path);
+        assert!(compressed.is_none(), "small file should not be compressed");
+    }
+
+    #[test]
+    fn prepare_api_upload_file_compresses_oversized_file_to_mp3() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let wav_path = temp_dir.path().join("large.wav");
+
+        // Build a mono 16 kHz WAV just over the 24 MB upload limit.
+        let sample_count = (API_UPLOAD_SIZE_LIMIT as usize / 2) + 1_000;
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&wav_path, spec).expect("create wav writer");
+        for i in 0..sample_count {
+            writer
+                .write_sample((i % 32_768) as i16)
+                .expect("write sample");
+        }
+        writer.finalize().expect("finalize wav");
+
+        let wav_size = fs::metadata(&wav_path).expect("wav metadata").len();
+        assert!(
+            wav_size > API_UPLOAD_SIZE_LIMIT,
+            "test WAV ({wav_size} B) should exceed the upload limit"
+        );
+
+        let (upload_path, compressed) = prepare_api_upload_file(&wav_path).expect("prepare");
+
+        assert!(
+            compressed.is_some(),
+            "oversized file should produce a compressed copy"
+        );
+        assert_ne!(
+            upload_path, wav_path,
+            "upload path should differ from the original"
+        );
+        assert!(upload_path.exists(), "compressed MP3 should exist on disk");
+
+        let mp3_size = fs::metadata(&upload_path).expect("mp3 metadata").len();
+        assert!(
+            mp3_size < wav_size,
+            "compressed MP3 ({mp3_size} B) should be smaller than WAV ({wav_size} B)"
+        );
+
+        // Clean up the temp MP3 produced outside the TempDir.
+        if let Some(ref path) = compressed {
+            let _ = fs::remove_file(path);
+        }
     }
 
     fn sample_transcript_result() -> TranscriptResult {

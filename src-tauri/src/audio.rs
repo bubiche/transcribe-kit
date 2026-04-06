@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::io::ErrorKind;
+use std::io::Write;
+use std::mem::MaybeUninit;
 use std::path::Path;
 
 use ogg::PacketReader;
@@ -42,6 +44,75 @@ pub fn decode_audio_file(path: &Path) -> Result<DecodedAudio, TranscriptionError
     }
 
     decode_with_symphonia(path)
+}
+
+const MP3_ENCODE_SAMPLE_RATE: u32 = 16_000;
+
+/// Decodes an audio file to 16 kHz mono PCM, then encodes it as a 64 kbps MP3.
+///
+/// Used to compress large audio files before uploading to the transcription API,
+/// which has a 25 MB upload limit.
+pub fn encode_mp3_for_upload(
+    source_path: &Path,
+    output_path: &Path,
+) -> Result<(), TranscriptionError> {
+    let decoded = decode_audio_file(source_path)?;
+
+    let i16_samples: Vec<i16> = decoded
+        .samples
+        .iter()
+        .map(|&s| (s * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+        .collect();
+
+    let mut builder = mp3lame_encoder::Builder::new()
+        .ok_or_else(|| TranscriptionError::AudioEncode("MP3 encoder init failed".to_string()))?;
+    builder.set_num_channels(1).map_err(|e| {
+        TranscriptionError::AudioEncode(format!("MP3 encoder config failed: {e:?}"))
+    })?;
+    builder
+        .set_sample_rate(MP3_ENCODE_SAMPLE_RATE)
+        .map_err(|e| {
+            TranscriptionError::AudioEncode(format!("MP3 encoder config failed: {e:?}"))
+        })?;
+    builder
+        .set_brate(mp3lame_encoder::Bitrate::Kbps64)
+        .map_err(|e| {
+            TranscriptionError::AudioEncode(format!("MP3 encoder config failed: {e:?}"))
+        })?;
+    builder
+        .set_quality(mp3lame_encoder::Quality::Best)
+        .map_err(|e| {
+            TranscriptionError::AudioEncode(format!("MP3 encoder config failed: {e:?}"))
+        })?;
+
+    let mut encoder = builder
+        .build()
+        .map_err(|e| TranscriptionError::AudioEncode(format!("MP3 encoder build failed: {e:?}")))?;
+
+    let buf_size = mp3lame_encoder::max_required_buffer_size(i16_samples.len());
+    let mut mp3_buffer: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); buf_size];
+
+    let encoded_size = encoder
+        .encode(mp3lame_encoder::MonoPcm(&i16_samples), &mut mp3_buffer)
+        .map_err(|e| TranscriptionError::AudioEncode(format!("MP3 encoding failed: {e:?}")))?;
+
+    let flush_size = encoder
+        .flush::<mp3lame_encoder::FlushNoGap>(&mut mp3_buffer[encoded_size..])
+        .map_err(|e| TranscriptionError::AudioEncode(format!("MP3 flush failed: {e:?}")))?;
+
+    let total_size = encoded_size + flush_size;
+    // SAFETY: encode() and flush() initialized exactly `total_size` bytes.
+    let mp3_bytes =
+        unsafe { std::slice::from_raw_parts(mp3_buffer.as_ptr() as *const u8, total_size) };
+
+    let mut file = File::create(output_path).map_err(|e| {
+        TranscriptionError::AudioEncode(format!("Could not create compressed audio file: {e}"))
+    })?;
+    file.write_all(mp3_bytes).map_err(|e| {
+        TranscriptionError::AudioEncode(format!("Could not write compressed audio file: {e}"))
+    })?;
+
+    Ok(())
 }
 
 fn decode_with_symphonia(path: &Path) -> Result<DecodedAudio, TranscriptionError> {
@@ -429,5 +500,51 @@ mod tests {
             Ok(_) => panic!("invalid file should fail"),
             Err(other) => panic!("expected audio decode error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn encode_mp3_for_upload_produces_smaller_mp3_from_wav() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let wav_path = temp_dir.path().join("input.wav");
+        let mp3_path = temp_dir.path().join("output.mp3");
+
+        // 1 second of a 440 Hz sine wave, 16 kHz mono.
+        let samples: Vec<i16> = (0..16_000)
+            .map(|i| {
+                (f32::sin(2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16_000.0) * 16_000.0)
+                    as i16
+            })
+            .collect();
+        write_wav_file(&wav_path, 16_000, 1, &samples).expect("write wav");
+
+        encode_mp3_for_upload(&wav_path, &mp3_path).expect("encode mp3");
+
+        let mp3_size = fs::metadata(&mp3_path).expect("mp3 metadata").len();
+        let wav_size = fs::metadata(&wav_path).expect("wav metadata").len();
+        assert!(mp3_size > 0, "MP3 file should be non-empty");
+        assert!(
+            mp3_size < wav_size,
+            "64 kbps MP3 ({mp3_size} B) should be smaller than WAV ({wav_size} B)"
+        );
+    }
+
+    #[test]
+    fn encode_mp3_for_upload_returns_error_for_invalid_audio() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let bad_path = temp_dir.path().join("garbage.wav");
+        let mp3_path = temp_dir.path().join("output.mp3");
+
+        fs::write(&bad_path, b"not audio data").expect("write garbage file");
+
+        match encode_mp3_for_upload(&bad_path, &mp3_path) {
+            Err(TranscriptionError::AudioDecode(_)) => {}
+            Err(other) => panic!("expected AudioDecode error, got {other:?}"),
+            Ok(()) => panic!("encoding invalid audio should fail"),
+        }
+
+        assert!(
+            !mp3_path.exists(),
+            "MP3 output should not be created when encoding fails"
+        );
     }
 }

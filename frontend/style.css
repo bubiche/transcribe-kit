@@ -338,6 +338,28 @@ body {
   color: var(--muted);
 }
 
+.field-badge {
+  display: inline-block;
+  margin-left: 0.5em;
+  padding: 0.1em 0.5em;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  vertical-align: middle;
+}
+
+.field-badge-ok {
+  background: rgba(31, 122, 77, 0.12);
+  color: var(--accent);
+}
+
+.field-badge-missing {
+  background: rgba(180, 130, 50, 0.12);
+  color: #b48232;
+}
+
 .field input,
 .field select {
   width: 100%;

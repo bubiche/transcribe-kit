@@ -4,11 +4,9 @@ use reqwest::{multipart, StatusCode};
 use serde::Deserialize;
 
 use super::TranscriptionError;
-use crate::models::{InputType, TranscriptResult, TranscriptSegment, TranscriptionSource};
+use crate::models::{InputType, TranscriptResult, TranscriptionSource};
 
 pub const PROVIDER_ID: &str = "openai-compatible";
-const RESPONSE_FORMAT_VERBOSE_JSON: &str = "verbose_json";
-const TIMESTAMP_GRANULARITY_SEGMENT: &str = "segment";
 const SUPPORTED_AUDIO_EXTENSIONS: &[&str] = &["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"];
 
 #[derive(Debug, Clone)]
@@ -32,28 +30,7 @@ impl ApiCredentials {
 }
 
 #[derive(Debug, Deserialize)]
-struct VerboseJsonResponse {
-    #[allow(dead_code)]
-    #[serde(default)]
-    task: Option<String>,
-    #[allow(dead_code)]
-    #[serde(default)]
-    language: Option<String>,
-    #[serde(default)]
-    duration: Option<f64>,
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    segments: Vec<VerboseJsonSegment>,
-}
-
-#[derive(Debug, Deserialize)]
-struct VerboseJsonSegment {
-    #[allow(dead_code)]
-    #[serde(default)]
-    id: Option<i64>,
-    start: f64,
-    end: f64,
+struct JsonResponse {
     #[serde(default)]
     text: String,
 }
@@ -183,7 +160,7 @@ pub async fn transcribe_audio_file(
         )));
     }
 
-    parse_verbose_json_response(&response_text, normalized_model_name)
+    parse_json_response(&response_text, normalized_model_name)
 }
 
 fn build_multipart_upload_spec(
@@ -221,93 +198,32 @@ fn build_multipart_form(spec: MultipartUploadSpec) -> Result<multipart::Form, Tr
     Ok(multipart::Form::new()
         .part("file", file_part)
         .text("model", spec.model_name)
-        .text("response_format", RESPONSE_FORMAT_VERBOSE_JSON)
-        .text("timestamp_granularities[]", TIMESTAMP_GRANULARITY_SEGMENT))
+        .text("response_format", "json"))
 }
 
-fn parse_verbose_json_response(
+fn parse_json_response(
     response_body: &str,
     model_name: &str,
 ) -> Result<TranscriptResult, TranscriptionError> {
-    let parsed: VerboseJsonResponse = serde_json::from_str(response_body).map_err(|error| {
+    let parsed: JsonResponse = serde_json::from_str(response_body).map_err(|error| {
         TranscriptionError::ApiRequest(format!(
             "The transcription API returned an unexpected response format: {error}"
         ))
     })?;
 
-    verbose_json_to_transcript_result(parsed, model_name)
-}
-
-fn verbose_json_to_transcript_result(
-    response: VerboseJsonResponse,
-    model_name: &str,
-) -> Result<TranscriptResult, TranscriptionError> {
-    let mut segments = Vec::with_capacity(response.segments.len());
-    for (index, segment) in response.segments.into_iter().enumerate() {
-        segments.push(api_segment_to_transcript_segment(segment, index)?);
-    }
-
     Ok(TranscriptResult {
-        text: response.text.trim().to_string(),
-        segments,
+        text: parsed.text.trim().to_string(),
+        segments: Vec::new(),
         source: TranscriptionSource {
             provider: PROVIDER_ID.to_string(),
             model_id: model_name.to_string(),
             input_type: InputType::File,
             live_capture_profile: None,
             source_name: None,
-            duration_ms: response.duration.and_then(seconds_to_duration_ms),
+            duration_ms: None,
         },
         post_processed_text: None,
     })
-}
-
-fn api_segment_to_transcript_segment(
-    segment: VerboseJsonSegment,
-    index: usize,
-) -> Result<TranscriptSegment, TranscriptionError> {
-    let start_ms = seconds_to_milliseconds(segment.start).ok_or_else(|| {
-        TranscriptionError::ApiRequest(format!(
-            "The transcription API returned an invalid start timestamp for segment {}.",
-            index + 1
-        ))
-    })?;
-    let end_ms = seconds_to_milliseconds(segment.end).ok_or_else(|| {
-        TranscriptionError::ApiRequest(format!(
-            "The transcription API returned an invalid end timestamp for segment {}.",
-            index + 1
-        ))
-    })?;
-
-    if end_ms < start_ms {
-        return Err(TranscriptionError::ApiRequest(format!(
-            "The transcription API returned segment {} with end time earlier than start time.",
-            index + 1
-        )));
-    }
-
-    Ok(TranscriptSegment {
-        start_ms,
-        end_ms,
-        text: segment.text.trim().to_string(),
-    })
-}
-
-fn seconds_to_milliseconds(seconds: f64) -> Option<i64> {
-    if !seconds.is_finite() || seconds < 0.0 {
-        return None;
-    }
-
-    let value = (seconds * 1_000.0).round();
-    if value > i64::MAX as f64 {
-        return Some(i64::MAX);
-    }
-
-    Some(value as i64)
-}
-
-fn seconds_to_duration_ms(seconds: f64) -> Option<u64> {
-    seconds_to_milliseconds(seconds).and_then(|value| u64::try_from(value).ok())
 }
 
 fn normalized_audio_extension(path: &Path) -> Option<String> {
@@ -385,9 +301,8 @@ mod tests {
 
     use super::{
         build_multipart_upload_spec, ensure_supported_audio_file_format, infer_audio_mime_type,
-        is_api_supported_audio_file, map_http_error, network_error_message,
-        parse_verbose_json_response, resolve_effective_model_name, RESPONSE_FORMAT_VERBOSE_JSON,
-        TIMESTAMP_GRANULARITY_SEGMENT,
+        is_api_supported_audio_file, map_http_error, network_error_message, parse_json_response,
+        resolve_effective_model_name,
     };
 
     #[test]
@@ -445,76 +360,31 @@ mod tests {
     }
 
     #[test]
-    fn parse_verbose_json_response_maps_segments_and_duration_to_milliseconds() {
+    fn parse_json_response_extracts_trimmed_text() {
+        let response_body = r#"{ "text": " transcribed text here " }"#;
+
+        let transcript =
+            parse_json_response(response_body, "gpt-4o-mini-transcribe").expect("parse response");
+
+        assert_eq!(transcript.text, "transcribed text here");
+        assert!(transcript.segments.is_empty());
+        assert_eq!(transcript.source.duration_ms, None);
+        assert_eq!(transcript.source.model_id, "gpt-4o-mini-transcribe");
+        assert_eq!(transcript.source.provider, "openai-compatible");
+    }
+
+    #[test]
+    fn parse_json_response_handles_extra_fields_gracefully() {
         let response_body = r#"{
             "task": "transcribe",
             "language": "english",
             "duration": 8.47,
-            "text": "transcribed text here",
-            "segments": [
-                { "id": 0, "start": 0.01, "end": 3.32, "text": "first" },
-                { "id": 1, "start": 3.32, "end": 8.47, "text": "second" }
-            ]
-        }"#;
-
-        let transcript = parse_verbose_json_response(response_body, "gpt-4o-mini-transcribe")
-            .expect("parse response");
-
-        assert_eq!(transcript.text, "transcribed text here");
-        assert_eq!(transcript.source.duration_ms, Some(8_470));
-        assert_eq!(transcript.segments.len(), 2);
-        assert_eq!(transcript.segments[0].start_ms, 10);
-        assert_eq!(transcript.segments[0].end_ms, 3_320);
-        assert_eq!(transcript.segments[1].start_ms, 3_320);
-        assert_eq!(transcript.segments[1].end_ms, 8_470);
-    }
-
-    #[test]
-    fn parse_verbose_json_response_handles_empty_segments() {
-        let response_body = r#"{
-            "duration": 2.0,
             "text": "hello",
             "segments": []
         }"#;
 
-        let transcript = parse_verbose_json_response(response_body, "gpt-4o-mini-transcribe")
-            .expect("parse response");
-        assert!(transcript.segments.is_empty());
-        assert_eq!(transcript.source.duration_ms, Some(2_000));
-    }
-
-    #[test]
-    fn parse_verbose_json_response_rejects_invalid_segment_range() {
-        let response_body = r#"{
-            "duration": 2.0,
-            "text": "hello",
-            "segments": [
-                { "id": 0, "start": 1.5, "end": 1.0, "text": "bad range" }
-            ]
-        }"#;
-
-        let error = parse_verbose_json_response(response_body, "gpt-4o-mini-transcribe")
-            .expect_err("invalid segment range should fail")
-            .to_string();
-
-        assert!(error.contains("end time earlier than start time"));
-    }
-
-    #[test]
-    fn parse_verbose_json_response_rejects_negative_segment_timestamp() {
-        let response_body = r#"{
-            "duration": 2.0,
-            "text": "hello",
-            "segments": [
-                { "id": 0, "start": -0.1, "end": 0.8, "text": "bad start" }
-            ]
-        }"#;
-
-        let error = parse_verbose_json_response(response_body, "gpt-4o-mini-transcribe")
-            .expect_err("negative timestamp should fail")
-            .to_string();
-
-        assert!(error.contains("invalid start timestamp"));
+        let transcript = parse_json_response(response_body, "whisper-1").expect("parse response");
+        assert_eq!(transcript.text, "hello");
     }
 
     #[test]
@@ -566,7 +436,5 @@ mod tests {
         assert_eq!(spec.model_name, "gpt-4o-mini-transcribe");
         assert_eq!(spec.mime_type, "audio/wav");
         assert_eq!(spec.file_bytes, b"RIFF\0\0\0\0WAVE");
-        assert_eq!(RESPONSE_FORMAT_VERBOSE_JSON, "verbose_json");
-        assert_eq!(TIMESTAMP_GRANULARITY_SEGMENT, "segment");
     }
 }

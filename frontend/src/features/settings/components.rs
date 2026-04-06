@@ -826,7 +826,14 @@ pub(super) fn ApiSettingsFields(
             </label>
 
             <label class="field">
-                <span class="field-label">"API key"</span>
+                <span class="field-label">
+                    "API key"
+                    {move || if state.form.api_key_present.get() {
+                        view! { <span class="field-badge field-badge-ok">"Saved"</span> }.into_any()
+                    } else {
+                        view! { <span class="field-badge field-badge-missing">"Not set"</span> }.into_any()
+                    }}
+                </span>
                 <input
                     type="password"
                     prop:value=move || state.form.api_key_input.get()
@@ -838,7 +845,7 @@ pub(super) fn ApiSettingsFields(
                         if state.form.api_key_present.get() {
                             "Leave blank to keep the saved key"
                         } else {
-                            "Stored in the system credential store"
+                            "Enter your API key"
                         }
                     }
                 />

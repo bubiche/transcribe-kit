@@ -108,6 +108,14 @@ pub fn TranscriptResultPanel(
         format_transcript_with_timestamps(&controller.partial_segments.get(), &current_partial_text)
     });
 
+    let has_segments = Signal::derive(move || {
+        controller
+            .transcript
+            .get()
+            .map(|r| !r.segments.is_empty())
+            .unwrap_or_else(|| !controller.partial_segments.get().is_empty())
+    });
+
     let can_copy =
         Signal::derive(move || can_copy_transcript(is_listening.get(), &plain_copy_text.get()));
     let plain_button_class = Signal::derive(move || {
@@ -258,13 +266,15 @@ pub fn TranscriptResultPanel(
                     >
                         {move || plain_button_label.get()}
                     </button>
-                    <button
-                        class=move || timestamp_button_class.get()
-                        on:click=copy_with_timestamps
-                        disabled=move || !can_copy.get()
-                    >
-                        {move || timestamp_button_label.get()}
-                    </button>
+                    <Show when=move || has_segments.get()>
+                        <button
+                            class=move || timestamp_button_class.get()
+                            on:click=copy_with_timestamps
+                            disabled=move || !can_copy.get()
+                        >
+                            {move || timestamp_button_label.get()}
+                        </button>
+                    </Show>
                 </div>
             </div>
 

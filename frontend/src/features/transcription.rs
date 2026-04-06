@@ -7,8 +7,9 @@ use leptos::task::spawn_local;
 
 use crate::live_recording::LiveRecordingController;
 use crate::tauri_api::{
-    get_settings, list_local_models, pick_audio_file, start_file_transcription, AppSettings,
-    InputType, LiveRecordingState, LocalModelDescriptor, ProviderMode,
+    get_settings, list_api_models, list_local_models, pick_audio_file, start_file_transcription,
+    ApiModelDescriptor, AppSettings, InputType, LiveRecordingState, LocalModelDescriptor,
+    ProviderMode,
 };
 
 pub use self::controller::TranscriptionController;
@@ -26,6 +27,7 @@ pub fn TranscribeScreen(
 ) -> impl IntoView {
     let settings = RwSignal::new(AppSettings::default());
     let local_models = RwSignal::new(Vec::<LocalModelDescriptor>::new());
+    let api_models = RwSignal::new(Vec::<ApiModelDescriptor>::new());
     let selected_file = RwSignal::new(None::<String>);
     let load_error = RwSignal::new(None::<String>);
     let is_loading = RwSignal::new(true);
@@ -41,13 +43,15 @@ pub fn TranscribeScreen(
 
             let settings_result = get_settings().await;
             let models_result = list_local_models().await;
+            let api_models_result = list_api_models().await;
 
-            match (settings_result, models_result) {
-                (Ok(loaded_settings), Ok(models)) => {
+            match (settings_result, models_result, api_models_result) {
+                (Ok(loaded_settings), Ok(models), Ok(api)) => {
                     settings.set(loaded_settings);
                     local_models.set(models);
+                    api_models.set(api);
                 }
-                (settings_result, models_result) => {
+                (settings_result, models_result, api_models_result) => {
                     let mut problems = Vec::new();
 
                     if let Err(error) = settings_result {
@@ -55,6 +59,9 @@ pub fn TranscribeScreen(
                     }
                     if let Err(error) = models_result {
                         problems.push(format!("local models: {error}"));
+                    }
+                    if let Err(error) = api_models_result {
+                        problems.push(format!("api models: {error}"));
                     }
 
                     load_error.set(Some(problems.join(" | ")));
@@ -78,6 +85,36 @@ pub fn TranscribeScreen(
             .get()
             .map(|model| model.downloaded)
             .unwrap_or(false)
+    });
+
+    let model_label = Signal::derive(move || match settings.get().provider_mode {
+        ProviderMode::Local => selected_model
+            .get()
+            .map(|m| m.label)
+            .unwrap_or_else(|| settings.get().local_model_id),
+        ProviderMode::Api => {
+            let s = settings.get();
+            if s.api_model_id == "custom" {
+                let name = s.api_custom_model_name.trim().to_string();
+                if name.is_empty() {
+                    "Custom model".to_string()
+                } else {
+                    name
+                }
+            } else {
+                api_models
+                    .get()
+                    .into_iter()
+                    .find(|m| m.id == s.api_model_id)
+                    .map(|m| m.label)
+                    .unwrap_or(s.api_model_id)
+            }
+        }
+    });
+
+    let provider_ready = Signal::derive(move || match settings.get().provider_mode {
+        ProviderMode::Local => model_ready.get(),
+        ProviderMode::Api => settings.get().api_key_present,
     });
 
     let provider_label = Signal::derive(move || match settings.get().provider_mode {
@@ -128,20 +165,25 @@ pub fn TranscribeScreen(
 
             transcription.reset_job_feedback();
 
-            if settings.get_untracked().provider_mode != ProviderMode::Local {
-                transcription.set_preflight_failure(
-                    InputType::File,
-                    "Phase 2c is wired to Local Whisper only. Switch the provider in Settings before importing a file.",
-                );
-                return;
-            }
-
-            if !model_ready.get_untracked() {
-                transcription.set_preflight_failure(
-                    InputType::File,
-                    "The selected Whisper model is not downloaded yet. Download it from Settings and try again.",
-                );
-                return;
+            match settings.get_untracked().provider_mode {
+                ProviderMode::Local => {
+                    if !model_ready.get_untracked() {
+                        transcription.set_preflight_failure(
+                            InputType::File,
+                            "The selected Whisper model is not downloaded yet. Download it from Settings and try again.",
+                        );
+                        return;
+                    }
+                }
+                ProviderMode::Api => {
+                    if !settings.get_untracked().api_key_present {
+                        transcription.set_preflight_failure(
+                            InputType::File,
+                            "No API key configured. Add your API key in Settings before importing a file.",
+                        );
+                        return;
+                    }
+                }
             }
 
             let Some(file_path) = (match pick_audio_file().await {
@@ -180,7 +222,7 @@ pub fn TranscribeScreen(
             <div class="hero">
                 <h2>"Transcription"</h2>
                 <p>
-                    "Start a live capture or import an audio file, run it through the selected local Whisper model, and review the transcript in-app."
+                    "Start a live capture or import an audio file to generate a transcript using the selected provider."
                 </p>
             </div>
 
@@ -190,20 +232,28 @@ pub fn TranscribeScreen(
                     <p class="status-value">{move || provider_label.get()}</p>
                 </div>
                 <div class="status-card">
-                    <p class="status-label">"Whisper model"</p>
-                    <p class="status-value">
-                        {move || {
-                            selected_model
-                                .get()
-                                .map(|model| model.label)
-                                .unwrap_or_else(|| settings.get().local_model_id)
+                    <p class="status-label">
+                        {move || match settings.get().provider_mode {
+                            ProviderMode::Local => "Whisper model",
+                            ProviderMode::Api => "API model",
                         }}
                     </p>
+                    <p class="status-value">{move || model_label.get()}</p>
                 </div>
                 <div class="status-card">
-                    <p class="status-label">"Model status"</p>
+                    <p class="status-label">
+                        {move || match settings.get().provider_mode {
+                            ProviderMode::Local => "Model status",
+                            ProviderMode::Api => "API status",
+                        }}
+                    </p>
                     <p class="status-value">
-                        {move || if model_ready.get() { "Ready" } else { "Download required" }}
+                        {move || if provider_ready.get() { "Ready" } else {
+                            match settings.get().provider_mode {
+                                ProviderMode::Local => "Download required",
+                                ProviderMode::Api => "API key required",
+                            }
+                        }}
                     </p>
                 </div>
                 <div class="status-card">
@@ -216,7 +266,7 @@ pub fn TranscribeScreen(
                 <section class="section">
                     <p class="tag">"Loading"</p>
                     <h3>"Preparing the transcription workspace"</h3>
-                    <p class="body-copy">"Fetching saved settings and local model metadata."</p>
+                    <p class="body-copy">"Fetching saved settings and model metadata."</p>
                 </section>
             </Show>
 
@@ -236,7 +286,10 @@ pub fn TranscribeScreen(
                                 <p class="tag">"Capture"</p>
                                 <h3>"Live capture or file import"</h3>
                                 <p class="body-copy">
-                                    "Start a live recording from the selected audio input, or import a local audio file. Supported import formats: WAV, MP3, FLAC, OGG, and M4A."
+                                    {move || match settings.get().provider_mode {
+                                        ProviderMode::Local => "Start a live recording from the selected audio input, or import a local audio file. Supported import formats: WAV, MP3, FLAC, OGG, and M4A.",
+                                        ProviderMode::Api => "Start a live recording from the selected audio input, or import a local audio file. Supported import formats: WAV, MP3, M4A, MP4, and WebM.",
+                                    }}
                                 </p>
                             </div>
 
@@ -266,13 +319,7 @@ pub fn TranscribeScreen(
                                         {move || format!("Provider: {}", provider_label.get())}
                                     </span>
                                     <span class="mini-chip">
-                                        {move || {
-                                            let label = selected_model
-                                                .get()
-                                                .map(|model| model.label)
-                                                .unwrap_or_else(|| settings.get().local_model_id);
-                                            format!("Model: {label}")
-                                        }}
+                                        {move || format!("Model: {}", model_label.get())}
                                     </span>
                                 </div>
 

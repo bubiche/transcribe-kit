@@ -15,6 +15,8 @@ pub enum TranscriptionError {
     AudioDecode(String),
     #[error("Model download failed: {0}")]
     Download(String),
+    #[error("Audio encoding error: {0}")]
+    AudioEncode(String),
     #[error("API transcription request failed: {0}")]
     ApiRequest(String),
 }
