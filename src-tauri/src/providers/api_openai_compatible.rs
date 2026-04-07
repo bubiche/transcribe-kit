@@ -903,4 +903,65 @@ mod tests {
         assert!(error.contains("server error"));
         assert!(error.contains("500"));
     }
+
+    // ---- post_process_transcript validation ----
+
+    #[tokio::test]
+    async fn post_process_transcript_rejects_empty_model() {
+        use super::post_process_transcript;
+        let credentials = ApiCredentials {
+            api_key: "sk-test".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+        };
+        let error = post_process_transcript("prompt text", "   ", &credentials)
+            .await
+            .expect_err("empty model should fail");
+        assert!(error.to_string().contains("model is required"));
+    }
+
+    #[tokio::test]
+    async fn post_process_transcript_rejects_empty_api_key() {
+        use super::post_process_transcript;
+        let credentials = ApiCredentials {
+            api_key: "   ".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+        };
+        let error = post_process_transcript("prompt text", "gpt-4o-mini", &credentials)
+            .await
+            .expect_err("empty key should fail");
+        assert!(error.to_string().contains("API key"));
+    }
+
+    #[tokio::test]
+    async fn post_process_transcript_rejects_invalid_base_url() {
+        use super::post_process_transcript;
+        let credentials = ApiCredentials {
+            api_key: "sk-test".to_string(),
+            base_url: "ftp://invalid".to_string(),
+        };
+        let error = post_process_transcript("prompt text", "gpt-4o-mini", &credentials)
+            .await
+            .expect_err("invalid url should fail");
+        assert!(error.to_string().contains("http"));
+    }
+
+    #[tokio::test]
+    async fn post_process_transcript_returns_network_error_for_unreachable_host() {
+        use super::post_process_transcript;
+        let credentials = ApiCredentials {
+            api_key: "sk-test".to_string(),
+            base_url: "http://127.0.0.1:1".to_string(), // port 1 should be unreachable
+        };
+        let error = post_process_transcript("prompt text", "gpt-4o-mini", &credentials)
+            .await
+            .expect_err("unreachable host should fail");
+        let error_str = error.to_string();
+        // Should be some kind of network/connection error
+        assert!(
+            error_str.contains("connect")
+                || error_str.contains("Network")
+                || error_str.contains("network"),
+            "expected network error, got: {error_str}"
+        );
+    }
 }

@@ -48,6 +48,30 @@ impl TemplateStore {
     }
 }
 
+/// Find a template by ID, returning a clone if found.
+pub fn find_template_by_id<'a>(
+    templates: &'a [PostProcessTemplate],
+    template_id: &str,
+) -> Option<&'a PostProcessTemplate> {
+    templates.iter().find(|t| t.id == template_id)
+}
+
+/// Validate that a template prompt contains the `{{transcript}}` placeholder.
+pub fn validate_template_placeholder(prompt: &str) -> Result<(), String> {
+    if !prompt.contains("{{transcript}}") {
+        return Err(
+            "The selected template is missing the {{transcript}} placeholder in its prompt."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Replace the `{{transcript}}` placeholder with the actual transcript text.
+pub fn render_template_prompt(prompt: &str, transcript_text: &str) -> String {
+    prompt.replace("{{transcript}}", transcript_text)
+}
+
 pub fn default_templates() -> Vec<PostProcessTemplate> {
     vec![
         PostProcessTemplate {
@@ -163,5 +187,145 @@ mod tests {
         use crate::models::AppSettings;
         let defaults = AppSettings::default();
         assert_eq!(defaults.postprocess_model, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn save_overwrites_existing_templates() {
+        let (_temp_dir, store) = temp_store();
+
+        let first = vec![PostProcessTemplate {
+            id: "first".to_string(),
+            name: "First".to_string(),
+            prompt: "{{transcript}}".to_string(),
+        }];
+        store.save(&first).expect("save first");
+
+        let second = vec![PostProcessTemplate {
+            id: "second".to_string(),
+            name: "Second".to_string(),
+            prompt: "Do something with {{transcript}}".to_string(),
+        }];
+        store.save(&second).expect("save second");
+
+        let loaded = store.load();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "second");
+    }
+
+    #[test]
+    fn load_preserves_template_order() {
+        let (_temp_dir, store) = temp_store();
+
+        let templates = vec![
+            PostProcessTemplate {
+                id: "c".to_string(),
+                name: "Charlie".to_string(),
+                prompt: "{{transcript}}".to_string(),
+            },
+            PostProcessTemplate {
+                id: "a".to_string(),
+                name: "Alpha".to_string(),
+                prompt: "{{transcript}}".to_string(),
+            },
+            PostProcessTemplate {
+                id: "b".to_string(),
+                name: "Bravo".to_string(),
+                prompt: "{{transcript}}".to_string(),
+            },
+        ];
+        store.save(&templates).expect("save");
+
+        let loaded = store.load();
+        assert_eq!(loaded[0].id, "c");
+        assert_eq!(loaded[1].id, "a");
+        assert_eq!(loaded[2].id, "b");
+    }
+
+    // ---- find_template_by_id ----
+
+    #[test]
+    fn find_template_by_id_returns_matching_template() {
+        let templates = default_templates();
+        let found = find_template_by_id(&templates, "builtin-cleanup");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Clean up transcript");
+    }
+
+    #[test]
+    fn find_template_by_id_returns_none_for_missing_id() {
+        let templates = default_templates();
+        let found = find_template_by_id(&templates, "nonexistent-id");
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn find_template_by_id_returns_none_for_empty_list() {
+        let templates: Vec<PostProcessTemplate> = vec![];
+        let found = find_template_by_id(&templates, "any-id");
+        assert!(found.is_none());
+    }
+
+    // ---- validate_template_placeholder ----
+
+    #[test]
+    fn validate_placeholder_accepts_prompt_with_placeholder() {
+        assert!(validate_template_placeholder("Summarize: {{transcript}}").is_ok());
+    }
+
+    #[test]
+    fn validate_placeholder_accepts_placeholder_in_middle() {
+        assert!(validate_template_placeholder("Before {{transcript}} after").is_ok());
+    }
+
+    #[test]
+    fn validate_placeholder_rejects_prompt_without_placeholder() {
+        let error = validate_template_placeholder("No placeholder here").unwrap_err();
+        assert!(error.contains("{{transcript}}"));
+    }
+
+    #[test]
+    fn validate_placeholder_rejects_empty_prompt() {
+        assert!(validate_template_placeholder("").is_err());
+    }
+
+    #[test]
+    fn validate_placeholder_rejects_partial_placeholder() {
+        assert!(validate_template_placeholder("{{transcri}}").is_err());
+        assert!(validate_template_placeholder("{transcript}").is_err());
+    }
+
+    // ---- render_template_prompt ----
+
+    #[test]
+    fn render_template_prompt_replaces_placeholder_with_transcript() {
+        let rendered = render_template_prompt("Summarize: {{transcript}}", "Hello world");
+        assert_eq!(rendered, "Summarize: Hello world");
+    }
+
+    #[test]
+    fn render_template_prompt_handles_empty_transcript() {
+        let rendered = render_template_prompt("Summarize: {{transcript}}", "");
+        assert_eq!(rendered, "Summarize: ");
+    }
+
+    #[test]
+    fn render_template_prompt_replaces_multiple_occurrences() {
+        let rendered =
+            render_template_prompt("First: {{transcript}}\nSecond: {{transcript}}", "text");
+        assert_eq!(rendered, "First: text\nSecond: text");
+    }
+
+    #[test]
+    fn render_template_prompt_preserves_special_characters_in_transcript() {
+        let transcript = "He said \"hello\" & 'goodbye' <tag> $100";
+        let rendered = render_template_prompt("{{transcript}}", transcript);
+        assert_eq!(rendered, transcript);
+    }
+
+    #[test]
+    fn render_template_prompt_handles_multiline_transcript() {
+        let transcript = "Line 1\nLine 2\nLine 3";
+        let rendered = render_template_prompt("Notes:\n{{transcript}}", transcript);
+        assert_eq!(rendered, "Notes:\nLine 1\nLine 2\nLine 3");
     }
 }

@@ -371,19 +371,13 @@ pub async fn run_postprocess(
     settings_store: State<'_, SettingsStore>,
 ) -> Result<String, String> {
     let templates = template_store.load();
-    let template = templates
-        .iter()
-        .find(|t| t.id == template_id)
+    let template = crate::templates::find_template_by_id(&templates, &template_id)
         .ok_or_else(|| format!("Template not found: {template_id}"))?;
 
-    if !template.prompt.contains("{{transcript}}") {
-        return Err(
-            "The selected template is missing the {{transcript}} placeholder in its prompt."
-                .to_string(),
-        );
-    }
+    crate::templates::validate_template_placeholder(&template.prompt).map_err(|e| e.to_string())?;
 
-    let rendered_prompt = template.prompt.replace("{{transcript}}", &transcript_text);
+    let rendered_prompt =
+        crate::templates::render_template_prompt(&template.prompt, &transcript_text);
 
     let settings = settings_store.load().map_err(|e| e.to_string())?;
     let api_key =
