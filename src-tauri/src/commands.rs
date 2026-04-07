@@ -386,15 +386,16 @@ pub async fn run_postprocess(
     let rendered_prompt = template.prompt.replace("{{transcript}}", &transcript_text);
 
     let settings = settings_store.load().map_err(|e| e.to_string())?;
-    let api_key = settings_store
-        .get_api_key(&settings.api_base_url)
-        .map_err(|error| match &error {
-            crate::settings::SettingsError::Validation(_) => {
-                "No API key is configured. Add an API key in Settings to use post-processing."
-                    .to_string()
-            }
-            _ => error.to_string(),
-        })?;
+    let api_key =
+        settings_store
+            .get_api_key(&settings.api_base_url)
+            .map_err(|error| match &error {
+                crate::settings::SettingsError::Validation(_) => {
+                    "No API key is configured. Add an API key in Settings to use post-processing."
+                        .to_string()
+                }
+                _ => error.to_string(),
+            })?;
 
     let credentials = ApiCredentials {
         api_key,

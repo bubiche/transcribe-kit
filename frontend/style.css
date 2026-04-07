@@ -1086,6 +1086,70 @@ body {
   background: rgba(215, 240, 222, 0.25);
 }
 
+.postprocess-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.postprocess-editor-column,
+.postprocess-result-column {
+  display: grid;
+  gap: 1rem;
+}
+
+.template-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.delete-template-button {
+  color: #a14b3b;
+  border-color: rgba(161, 75, 59, 0.22);
+}
+
+.delete-template-button:hover:not(:disabled) {
+  background: rgba(161, 75, 59, 0.08);
+  border-color: rgba(161, 75, 59, 0.32);
+}
+
+.template-prompt-textarea {
+  width: 100%;
+  min-height: 180px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  padding: 0.85rem 0.95rem;
+  font: inherit;
+  font-family: "SFMono-Regular", "Menlo", "Monaco", monospace;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.template-prompt-textarea:focus {
+  outline: 2px solid rgba(31, 122, 77, 0.18);
+  border-color: rgba(31, 122, 77, 0.42);
+}
+
+.template-empty-state {
+  padding: 1rem;
+  border-radius: 16px;
+  border: 1px dashed rgba(31, 122, 77, 0.25);
+  background: rgba(215, 240, 222, 0.25);
+  text-align: center;
+}
+
+.postprocess-result-placeholder {
+  border-style: dashed;
+  border-color: rgba(31, 122, 77, 0.2);
+  background: rgba(247, 251, 244, 0.72);
+  min-height: 320px;
+}
+
 @media (max-width: 860px) {
   .shell {
     padding: 1rem;
@@ -1104,6 +1168,10 @@ body {
   }
 
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .postprocess-grid {
     grid-template-columns: 1fr;
   }
 

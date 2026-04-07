@@ -4,8 +4,8 @@ use crate::live_recording::LiveRecordingController;
 use crate::tauri_api::{HotkeyMode, ProviderMode};
 
 use super::components::{
-    CaptureProfileField, HotkeySettingsCard, InputDeviceField, ProviderSettingsCard,
-    SettingsActionsCard,
+    CaptureProfileField, HotkeySettingsCard, InputDeviceField, PostProcessModelField,
+    ProviderSettingsCard, SettingsActionsCard,
 };
 use super::state::SettingsFeatureState;
 
@@ -91,6 +91,7 @@ pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView 
                             input_devices=state.input_devices
                             live_capture_profile=state.form.live_capture_profile
                         />
+                        <PostProcessModelField form=state.form />
                     </div>
                     <div class="settings-sidebar">
                         <HotkeySettingsCard state=state />

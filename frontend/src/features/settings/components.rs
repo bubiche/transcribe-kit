@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+use super::state::SettingsFormState;
 use crate::tauri_api::{AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile, ProviderMode};
 
 use super::input_device_hints::{
@@ -860,5 +861,32 @@ pub(super) fn ApiSettingsFields(
                 <span>"Remove the saved API key for this base URL"</span>
             </label>
         </div>
+    }
+}
+
+#[component]
+pub(super) fn PostProcessModelField(form: SettingsFormState) -> impl IntoView {
+    view! {
+        <section class="section settings-card">
+            <p class="tag">"Post-processing"</p>
+            <h4>"Post-processing model"</h4>
+            <p class="body-copy">
+                "The chat model used when running post-processing on transcripts. This uses the same API key and base URL configured above."
+            </p>
+
+            <label class="field">
+                <span class="field-label">"Model name"</span>
+                <input
+                    type="text"
+                    prop:value=move || form.postprocess_model.get()
+                    on:input=move |event| form.postprocess_model.set(event_target_value(&event))
+                    placeholder="gpt-4o-mini"
+                />
+            </label>
+
+            <p class="field-hint">
+                "Enter the model identifier your provider expects (e.g. gpt-4o-mini, llama3, etc.)."
+            </p>
+        </section>
     }
 }

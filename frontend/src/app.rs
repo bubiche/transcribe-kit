@@ -130,7 +130,9 @@ pub fn App() -> impl IntoView {
                     />
                 </div>
                 <div class="screen" class:screen-active=move || active_screen.get() == Screen::PostProcess>
-                    <PostProcessScreen />
+                    <PostProcessScreen
+                        active=Signal::derive(move || active_screen.get() == Screen::PostProcess)
+                    />
                 </div>
                 <div class="screen" class:screen-active=move || active_screen.get() == Screen::Settings>
                     <SettingsScreen live_recording=live_recording />
