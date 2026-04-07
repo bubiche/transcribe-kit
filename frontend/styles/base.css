@@ -147,7 +147,7 @@ body {
   max-width: 1180px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.5rem;
 }
 
@@ -159,61 +159,84 @@ body {
   box-shadow: var(--shadow);
 }
 
-.sidebar {
-  padding: 1.4rem;
-  position: sticky;
-  top: 2rem;
-  align-self: start;
+.app-header {
+  max-width: 1180px;
+  margin: 0 auto 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
-.screen {
-  display: none;
-}
-
-.screen-active {
-  display: contents;
-}
-
-.brand {
-  margin: 0 0 0.5rem;
-  font-size: 2rem;
+.app-header-brand {
+  margin: 0;
+  font-size: 1.4rem;
   line-height: 1;
 }
 
-.lede {
-  margin: 0;
-  color: var(--muted);
-}
-
-.nav {
-  margin-top: 1.5rem;
-  display: grid;
-  gap: 0.75rem;
-}
-
-.nav-chip {
-  padding: 0.85rem 1rem;
-  border-radius: 999px;
+.app-header-settings-button {
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.65);
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
   font: inherit;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
+  font-weight: 700;
   color: var(--ink);
+  background: rgba(255, 255, 255, 0.8);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
 }
 
-.nav-chip:hover {
+.app-header-settings-button:hover {
   background: rgba(31, 122, 77, 0.06);
   border-color: rgba(31, 122, 77, 0.2);
 }
 
-.nav-chip-active {
-  background: var(--accent-soft);
-  border-color: rgba(31, 122, 77, 0.3);
-  color: var(--accent);
-  font-weight: 700;
+.postprocess-inline {
+  display: none;
+}
+
+.postprocess-inline-visible {
+  display: contents;
+}
+
+.settings-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(21, 35, 24, 0.35);
+  backdrop-filter: blur(4px);
+  justify-content: center;
+  align-items: flex-start;
+  padding: 2rem;
+  overflow-y: auto;
+}
+
+.settings-overlay-visible {
+  display: flex;
+}
+
+.settings-modal {
+  width: 100%;
+  max-width: 920px;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+  border-radius: 24px;
+  background: var(--bg);
+  box-shadow: 0 24px 64px rgba(20, 40, 23, 0.2);
+}
+
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.2rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-modal-header h2 {
+  margin: 0;
 }
 
 .content {

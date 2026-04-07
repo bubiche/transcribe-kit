@@ -3,7 +3,6 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
 
-use crate::features::navigation::Screen;
 use crate::live_recording::format_duration;
 use crate::tauri_api::LiveRecordingState;
 use crate::tauri_api::{
@@ -80,7 +79,7 @@ pub fn JobStatusPanel(
 pub fn TranscriptResultPanel(
     active: Signal<bool>,
     controller: TranscriptionController,
-    active_screen: RwSignal<Screen>,
+    show_postprocess: RwSignal<bool>,
     live_recording_state: Signal<LiveRecordingState>,
     live_recording_label: Signal<String>,
     live_recording_elapsed_ms: Signal<u64>,
@@ -297,9 +296,9 @@ pub fn TranscriptResultPanel(
                     <Show when=move || show_postprocess_button.get()>
                         <button
                             class="secondary-button postprocess-nav-button"
-                            on:click=move |_| active_screen.set(Screen::PostProcess)
+                            on:click=move |_| show_postprocess.update(|v| *v = !*v)
                         >
-                            "Post-process"
+                            {move || if show_postprocess.get() { "Hide post-process" } else { "Post-process" }}
                         </button>
                     </Show>
                 </div>

@@ -5,7 +5,6 @@ mod utils;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::features::navigation::Screen;
 use crate::live_recording::LiveRecordingController;
 use crate::tauri_api::{
     get_settings, list_api_models, list_local_models, pick_audio_file, start_file_transcription,
@@ -21,7 +20,7 @@ pub use self::utils::format_timestamp;
 #[component]
 pub fn TranscribeScreen(
     active: Signal<bool>,
-    active_screen: RwSignal<Screen>,
+    show_postprocess: RwSignal<bool>,
     transcription: TranscriptionController,
     live_recording: LiveRecordingController,
     live_recording_state: Signal<LiveRecordingState>,
@@ -339,7 +338,7 @@ pub fn TranscribeScreen(
                     <TranscriptResultPanel
                         active=active
                         controller=transcription
-                        active_screen=active_screen
+                        show_postprocess=show_postprocess
                         live_recording_state=live_recording_state
                         live_recording_label=live_recording_label
                         live_recording_elapsed_ms=live_recording_elapsed_ms

@@ -5,7 +5,6 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 
 use crate::features::{
-    navigation::{AppSidebar, Screen},
     postprocess::PostProcessScreen,
     settings::SettingsScreen,
     transcription::{TranscribeScreen, TranscriptionController},
@@ -20,7 +19,8 @@ use crate::tauri_api::{
 
 #[component]
 pub fn App() -> impl IntoView {
-    let active_screen = RwSignal::new(Screen::Settings);
+    let show_settings = RwSignal::new(false);
+    let show_postprocess = RwSignal::new(false);
     let hotkey_activity = RwSignal::new(None::<HotkeyActivityEvent>);
     let activity_nonce = RwSignal::new(0_u64);
     let recording_elapsed_tick = RwSignal::new(0_u64);
@@ -107,7 +107,7 @@ pub fn App() -> impl IntoView {
             &job_status,
             transcript.as_ref(),
         ) {
-            active_screen.set(Screen::Transcribe);
+            show_settings.set(false);
             last_navigated_completion_nonce.set(Some(completion_nonce));
         }
     });
@@ -116,27 +116,36 @@ pub fn App() -> impl IntoView {
         <main class="shell">
             <HotkeyActivityBanner activity=hotkey_activity />
             <LiveRecordingBanner controller=live_recording elapsed_tick=recording_elapsed_tick />
+            <AppHeader show_settings=show_settings />
             <div class="frame">
-                <AppSidebar active=active_screen />
-
-                <div class="screen" class:screen-active=move || active_screen.get() == Screen::Transcribe>
-                    <TranscribeScreen
-                        active=Signal::derive(move || active_screen.get() == Screen::Transcribe)
-                        active_screen=active_screen
-                        transcription=transcription
-                        live_recording=live_recording
-                        live_recording_state=live_recording_state
-                        live_recording_label=live_recording_label
-                        live_recording_elapsed_ms=live_recording_elapsed_ms
-                    />
-                </div>
-                <div class="screen" class:screen-active=move || active_screen.get() == Screen::PostProcess>
+                <TranscribeScreen
+                    active=Signal::derive(|| true)
+                    show_postprocess=show_postprocess
+                    transcription=transcription
+                    live_recording=live_recording
+                    live_recording_state=live_recording_state
+                    live_recording_label=live_recording_label
+                    live_recording_elapsed_ms=live_recording_elapsed_ms
+                />
+                <div class="postprocess-inline" class:postprocess-inline-visible=move || show_postprocess.get()>
                     <PostProcessScreen
-                        active=Signal::derive(move || active_screen.get() == Screen::PostProcess)
+                        active=Signal::derive(move || show_postprocess.get())
                         transcription=transcription
                     />
                 </div>
-                <div class="screen" class:screen-active=move || active_screen.get() == Screen::Settings>
+            </div>
+            <div
+                class="settings-overlay"
+                class:settings-overlay-visible=move || show_settings.get()
+                on:click=move |_| show_settings.set(false)
+            >
+                <div class="settings-modal" on:click=|event| event.stop_propagation()>
+                    <div class="settings-modal-header">
+                        <h2>"Settings"</h2>
+                        <button class="secondary-button" on:click=move |_| show_settings.set(false)>
+                            "Close"
+                        </button>
+                    </div>
                     <SettingsScreen live_recording=live_recording />
                 </div>
             </div>
@@ -300,6 +309,21 @@ mod tests {
             live_capture_state_label(LiveCaptureProfile::MeetingMix, true, true),
             "Transcribing meeting capture"
         );
+    }
+}
+
+#[component]
+fn AppHeader(show_settings: RwSignal<bool>) -> impl IntoView {
+    view! {
+        <header class="app-header">
+            <h1 class="app-header-brand">"Transcribe Kit"</h1>
+            <button
+                class="app-header-settings-button"
+                on:click=move |_| show_settings.update(|open| *open = !*open)
+            >
+                {move || if show_settings.get() { "Close settings" } else { "Settings" }}
+            </button>
+        </header>
     }
 }
 
