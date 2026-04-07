@@ -2,7 +2,6 @@ use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-use super::state::SettingsFormState;
 use crate::tauri_api::{AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile, ProviderMode};
 
 use super::input_device_hints::{
@@ -37,7 +36,7 @@ pub(super) fn ProviderSettingsCard(
                 </Show>
 
                 <Show when=move || matches!(state.form.provider_mode.get(), ProviderMode::Api)>
-                    <ApiSettingsFields state=state custom_api_selected=custom_api_selected />
+                    <ApiModelFields state=state custom_api_selected=custom_api_selected />
                 </Show>
             </div>
         </section>
@@ -64,13 +63,13 @@ pub(super) fn CaptureProfileField(
     view! {
         <section class="section settings-card">
             <p class="tag">"Capture"</p>
-            <h4>"Capture profile"</h4>
+            <h3>"Capture profile"</h3>
             <p class="body-copy">
-                "Choose whether you are recording just your own voice or capturing a full meeting."
+                "Choose whether you are recording your own voice or capturing a full meeting."
             </p>
 
             <label class="field">
-                <span class="field-label">"Profile"</span>
+                <span class="field-label">"Capture mode"</span>
                 <select
                     prop:value=move || match live_capture_profile.get() {
                         LiveCaptureProfile::MicrophoneOnly => "microphone-only",
@@ -199,9 +198,9 @@ pub(super) fn InputDeviceField(
             <div class="input-device-panel-header">
                 <div class="stack">
                     <p class="tag">"Audio input"</p>
-                    <h4>"Choose the audio input for live capture"</h4>
+                    <h3>"Audio input"</h3>
                     <p class="body-copy">
-                        "This dropdown controls which audio input the live capture pipeline will use when recording starts."
+                        "Select which microphone or audio source to use for live recording."
                     </p>
                 </div>
                 <span class="mini-chip">{move || device_count_label.get()}</span>
@@ -508,12 +507,9 @@ pub(super) fn HotkeySettingsCard(state: SettingsFeatureState) -> impl IntoView {
             </label>
 
             <p class="field-hint">
-                "Click the control, then press the shortcut you want. Press Escape to cancel or Tab to move on."
+                "Click the control, then press the shortcut you want. Press Escape to cancel or Tab to move on. Test it by pressing the hotkey while on this screen."
             </p>
             <p class="field-hint">{move || hotkey_mode_label.get()}</p>
-            <p class="field-hint">
-                "Test it by pressing the hotkey here for an in-app banner, then switch to another app and press it again to flash the dock or taskbar."
-            </p>
 
             <Show when=move || capture_feedback.get().is_some()>
                 <p class="field-hint field-warning">
@@ -585,7 +581,7 @@ pub(super) fn SettingsActionsCard(
             <p class="tag">"Apply"</p>
             <h3>"Save configuration"</h3>
             <p class="body-copy">
-                "Provider, model, capture profile, audio input, and hotkey preferences are stored together so the app opens in the same state next time."
+                "All changes take effect after saving."
             </p>
 
             <button class="primary-button" on:click=on_save disabled=move || is_saving.get()>
@@ -603,7 +599,7 @@ pub(super) fn SettingsActionsCard(
 fn ProviderModeField(provider_mode: RwSignal<ProviderMode>) -> impl IntoView {
     view! {
         <label class="field">
-            <span class="field-label">"Mode"</span>
+            <span class="field-label">"Transcription provider"</span>
             <select
                 prop:value=move || match provider_mode.get() {
                     ProviderMode::Local => "local",
@@ -777,14 +773,11 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 #[component]
-pub(super) fn ApiSettingsFields(
-    state: SettingsFeatureState,
-    custom_api_selected: Signal<bool>,
-) -> impl IntoView {
+fn ApiModelFields(state: SettingsFeatureState, custom_api_selected: Signal<bool>) -> impl IntoView {
     view! {
         <div class="stack">
             <label class="field">
-                <span class="field-label">"API model"</span>
+                <span class="field-label">"API transcription model"</span>
                 <select
                     prop:value=move || state.form.api_model_id.get()
                     on:change=move |event| state.form.api_model_id.set(event_target_value(&event))
@@ -815,78 +808,80 @@ pub(super) fn ApiSettingsFields(
                     />
                 </label>
             </Show>
-
-            <label class="field">
-                <span class="field-label">"Base URL"</span>
-                <input
-                    type="url"
-                    prop:value=move || state.form.api_base_url.get()
-                    on:input=move |event| state.form.api_base_url.set(event_target_value(&event))
-                    placeholder="https://api.openai.com/v1"
-                />
-            </label>
-
-            <label class="field">
-                <span class="field-label">
-                    "API key"
-                    {move || if state.form.api_key_present.get() {
-                        view! { <span class="field-badge field-badge-ok">"Saved"</span> }.into_any()
-                    } else {
-                        view! { <span class="field-badge field-badge-missing">"Not set"</span> }.into_any()
-                    }}
-                </span>
-                <input
-                    type="password"
-                    prop:value=move || state.form.api_key_input.get()
-                    on:input=move |event| {
-                        state.form.api_key_input.set(event_target_value(&event));
-                        state.form.clear_api_key.set(false);
-                    }
-                    placeholder=move || {
-                        if state.form.api_key_present.get() {
-                            "Leave blank to keep the saved key"
-                        } else {
-                            "Enter your API key"
-                        }
-                    }
-                />
-            </label>
-
-            <label class="checkbox-row">
-                <input
-                    type="checkbox"
-                    prop:checked=move || state.form.clear_api_key.get()
-                    on:change=move |event| state.form.clear_api_key.set(event_target_checked(&event))
-                />
-                <span>"Remove the saved API key for this base URL"</span>
-            </label>
         </div>
     }
 }
 
 #[component]
-pub(super) fn PostProcessModelField(form: SettingsFormState) -> impl IntoView {
+pub(super) fn ApiConnectionCard(state: SettingsFeatureState) -> impl IntoView {
     view! {
         <section class="section settings-card">
-            <p class="tag">"Post-processing"</p>
-            <h4>"Post-processing model"</h4>
+            <p class="tag">"API"</p>
+            <h3>"API settings"</h3>
             <p class="body-copy">
-                "The chat model used when running post-processing on transcripts. This uses the same API key and base URL configured above."
+                "Endpoint, credentials, and post-processing model shared by API transcription and post-processing."
             </p>
 
-            <label class="field">
-                <span class="field-label">"Model name"</span>
-                <input
-                    type="text"
-                    prop:value=move || form.postprocess_model.get()
-                    on:input=move |event| form.postprocess_model.set(event_target_value(&event))
-                    placeholder="gpt-4o-mini"
-                />
-            </label>
+            <div class="stack">
+                <label class="field">
+                    <span class="field-label">"Base URL"</span>
+                    <input
+                        type="url"
+                        prop:value=move || state.form.api_base_url.get()
+                        on:input=move |event| state.form.api_base_url.set(event_target_value(&event))
+                        placeholder="https://api.openai.com/v1"
+                    />
+                </label>
 
-            <p class="field-hint">
-                "Enter the model identifier your provider expects (e.g. gpt-4o-mini, llama3, etc.)."
-            </p>
+                <label class="field">
+                    <span class="field-label">
+                        "API key"
+                        {move || if state.form.api_key_present.get() {
+                            view! { <span class="field-badge field-badge-ok">"Saved"</span> }.into_any()
+                        } else {
+                            view! { <span class="field-badge field-badge-missing">"Not set"</span> }.into_any()
+                        }}
+                    </span>
+                    <input
+                        type="password"
+                        prop:value=move || state.form.api_key_input.get()
+                        on:input=move |event| {
+                            state.form.api_key_input.set(event_target_value(&event));
+                            state.form.clear_api_key.set(false);
+                        }
+                        placeholder=move || {
+                            if state.form.api_key_present.get() {
+                                "Leave blank to keep the saved key"
+                            } else {
+                                "Enter your API key"
+                            }
+                        }
+                    />
+                </label>
+
+                <label class="checkbox-row">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || state.form.clear_api_key.get()
+                        on:change=move |event| state.form.clear_api_key.set(event_target_checked(&event))
+                    />
+                    <span>"Remove the saved API key for this base URL"</span>
+                </label>
+
+                <label class="field">
+                    <span class="field-label">"Post-processing model"</span>
+                    <input
+                        type="text"
+                        prop:value=move || state.form.postprocess_model.get()
+                        on:input=move |event| state.form.postprocess_model.set(event_target_value(&event))
+                        placeholder="gpt-4o-mini"
+                    />
+                </label>
+
+                <p class="field-hint">
+                    "The chat model used for post-processing (e.g. gpt-4o-mini, llama3). Enter the model identifier your provider expects."
+                </p>
+            </div>
         </section>
     }
 }
