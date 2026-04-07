@@ -55,7 +55,8 @@ pub fn run() {
             commands::start_file_transcription,
             commands::transcribe_live_recording,
             commands::list_templates,
-            commands::save_templates
+            commands::save_templates,
+            commands::run_postprocess
         ])
         .setup(move |app| {
             let main_window = app.get_webview_window("main").expect("main window");

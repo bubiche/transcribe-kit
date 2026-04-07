@@ -363,6 +363,53 @@ pub fn save_templates(
     store.save(&templates).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub async fn run_postprocess(
+    transcript_text: String,
+    template_id: String,
+    template_store: State<'_, TemplateStore>,
+    settings_store: State<'_, SettingsStore>,
+) -> Result<String, String> {
+    let templates = template_store.load();
+    let template = templates
+        .iter()
+        .find(|t| t.id == template_id)
+        .ok_or_else(|| format!("Template not found: {template_id}"))?;
+
+    if !template.prompt.contains("{{transcript}}") {
+        return Err(
+            "The selected template is missing the {{transcript}} placeholder in its prompt."
+                .to_string(),
+        );
+    }
+
+    let rendered_prompt = template.prompt.replace("{{transcript}}", &transcript_text);
+
+    let settings = settings_store.load().map_err(|e| e.to_string())?;
+    let api_key = settings_store
+        .get_api_key(&settings.api_base_url)
+        .map_err(|error| match &error {
+            crate::settings::SettingsError::Validation(_) => {
+                "No API key is configured. Add an API key in Settings to use post-processing."
+                    .to_string()
+            }
+            _ => error.to_string(),
+        })?;
+
+    let credentials = ApiCredentials {
+        api_key,
+        base_url: settings.api_base_url,
+    };
+
+    crate::providers::api_openai_compatible::post_process_transcript(
+        &rendered_prompt,
+        &settings.postprocess_model,
+        &credentials,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 fn load_api_credentials(
     settings: &AppSettings,
     settings_store: &SettingsStore,

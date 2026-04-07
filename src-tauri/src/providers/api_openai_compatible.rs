@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use reqwest::{multipart, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::TranscriptionError;
 use crate::models::{InputType, TranscriptResult, TranscriptionSource};
@@ -226,6 +226,165 @@ fn parse_json_response(
     })
 }
 
+// ---- Chat completions (post-processing) ----
+
+#[derive(Debug, Serialize)]
+struct ChatCompletionsRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionsResponse {
+    #[serde(default)]
+    choices: Vec<ChatChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatChoice {
+    #[serde(default)]
+    message: ChatChoiceMessage,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChatChoiceMessage {
+    #[serde(default)]
+    content: Option<String>,
+}
+
+pub fn chat_completions_endpoint(base_url: &str) -> String {
+    format!("{}/chat/completions", base_url.trim_end_matches('/'))
+}
+
+pub async fn post_process_transcript(
+    rendered_prompt: &str,
+    model: &str,
+    credentials: &ApiCredentials,
+) -> Result<String, TranscriptionError> {
+    credentials
+        .validate()
+        .map_err(|message| TranscriptionError::ApiRequest(message.to_string()))?;
+
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(TranscriptionError::ApiRequest(
+            "Post-processing model is required.".to_string(),
+        ));
+    }
+
+    let request_body = ChatCompletionsRequest {
+        model: model.to_string(),
+        messages: vec![ChatMessage {
+            role: "user".to_string(),
+            content: rendered_prompt.to_string(),
+        }],
+    };
+
+    let response = reqwest::Client::new()
+        .post(chat_completions_endpoint(&credentials.base_url))
+        .bearer_auth(credentials.api_key.trim())
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|error| {
+            TranscriptionError::ApiRequest(network_error_message(
+                error.is_timeout(),
+                error.is_connect(),
+                &error.to_string(),
+            ))
+        })?;
+
+    let status = response.status();
+    let response_text = response.text().await.map_err(|error| {
+        TranscriptionError::ApiRequest(format!("Could not read the API response body: {error}"))
+    })?;
+
+    if !status.is_success() {
+        return Err(TranscriptionError::ApiRequest(map_chat_completions_error(
+            status,
+            &response_text,
+        )));
+    }
+
+    parse_chat_completions_response(&response_text)
+}
+
+fn parse_chat_completions_response(response_body: &str) -> Result<String, TranscriptionError> {
+    let parsed: ChatCompletionsResponse = serde_json::from_str(response_body).map_err(|error| {
+        TranscriptionError::ApiRequest(format!(
+            "The post-processing API returned an unexpected response format: {error}"
+        ))
+    })?;
+
+    let content = parsed
+        .choices
+        .into_iter()
+        .next()
+        .and_then(|choice| choice.message.content)
+        .unwrap_or_default();
+
+    Ok(content.trim().to_string())
+}
+
+fn map_chat_completions_error(status: StatusCode, response_body: &str) -> String {
+    let detail = extract_api_error_message(response_body);
+
+    // Detect context-length errors on 400 responses
+    if status == StatusCode::BAD_REQUEST {
+        if let Some(ref detail_text) = detail {
+            let lower = detail_text.to_ascii_lowercase();
+            if lower.contains("context length")
+                || lower.contains("too many tokens")
+                || lower.contains("maximum context")
+                || lower.contains("token limit")
+            {
+                return format!(
+                    "The transcript may be too long for the selected model. \
+                     Try a shorter transcript or a model with a larger context window. \
+                     Details: {detail_text}"
+                );
+            }
+        }
+    }
+
+    let base_message = match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+            "Authentication failed. Check that your API key is valid for the configured provider."
+                .to_string()
+        }
+        StatusCode::NOT_FOUND => {
+            "The chat completions API endpoint was not found. Verify your API base URL.".to_string()
+        }
+        StatusCode::TOO_MANY_REQUESTS => {
+            "The API rate limit has been reached. Please wait and try again.".to_string()
+        }
+        StatusCode::BAD_REQUEST => format!(
+            "The post-processing API request was rejected (HTTP {}).",
+            status.as_u16()
+        ),
+        _ if status.is_server_error() => format!(
+            "The post-processing API returned a server error (HTTP {}). Please try again soon.",
+            status.as_u16()
+        ),
+        _ => format!(
+            "The post-processing API request failed with HTTP {}.",
+            status.as_u16()
+        ),
+    };
+
+    if let Some(detail) = detail {
+        format!("{base_message} Details: {detail}")
+    } else {
+        base_message
+    }
+}
+
 fn normalized_audio_extension(path: &Path) -> Option<String> {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -300,9 +459,11 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        build_multipart_upload_spec, ensure_supported_audio_file_format, extract_api_error_message,
-        infer_audio_mime_type, is_api_supported_audio_file, map_http_error, network_error_message,
-        parse_json_response, resolve_effective_model_name, transcription_endpoint, ApiCredentials,
+        build_multipart_upload_spec, chat_completions_endpoint, ensure_supported_audio_file_format,
+        extract_api_error_message, infer_audio_mime_type, is_api_supported_audio_file,
+        map_chat_completions_error, map_http_error, network_error_message,
+        parse_chat_completions_response, parse_json_response, resolve_effective_model_name,
+        transcription_endpoint, ApiCredentials,
     };
 
     #[test]
@@ -593,5 +754,153 @@ mod tests {
         assert_eq!(spec.model_name, "gpt-4o-mini-transcribe");
         assert_eq!(spec.mime_type, "audio/wav");
         assert_eq!(spec.file_bytes, b"RIFF\0\0\0\0WAVE");
+    }
+
+    // ---- chat completions (post-processing) ----
+
+    #[test]
+    fn chat_completions_endpoint_appends_path() {
+        assert_eq!(
+            chat_completions_endpoint("https://api.openai.com/v1"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn chat_completions_endpoint_trims_trailing_slash() {
+        assert_eq!(
+            chat_completions_endpoint("https://api.openai.com/v1/"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn chat_completions_endpoint_works_with_localhost() {
+        assert_eq!(
+            chat_completions_endpoint("http://localhost:11434/v1"),
+            "http://localhost:11434/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn parse_chat_completions_response_extracts_content() {
+        let body = r#"{
+            "id": "chatcmpl-abc",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "  Here are the meeting notes.  "
+                    },
+                    "finish_reason": "stop"
+                }
+            ]
+        }"#;
+
+        let result = parse_chat_completions_response(body).expect("parse response");
+        assert_eq!(result, "Here are the meeting notes.");
+    }
+
+    #[test]
+    fn parse_chat_completions_response_handles_empty_choices() {
+        let body = r#"{"choices": []}"#;
+        let result = parse_chat_completions_response(body).expect("parse response");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn parse_chat_completions_response_handles_null_content() {
+        let body = r#"{"choices": [{"message": {}}]}"#;
+        let result = parse_chat_completions_response(body).expect("parse response");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn parse_chat_completions_response_handles_extra_fields() {
+        let body = r#"{
+            "id": "chatcmpl-xyz",
+            "object": "chat.completion",
+            "created": 1234567890,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Summary of transcript"
+                    },
+                    "logprobs": null,
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+        }"#;
+
+        let result = parse_chat_completions_response(body).expect("parse response");
+        assert_eq!(result, "Summary of transcript");
+    }
+
+    #[test]
+    fn parse_chat_completions_response_rejects_malformed_json() {
+        let error = parse_chat_completions_response("not valid json")
+            .expect_err("malformed json should fail")
+            .to_string();
+        assert!(error.contains("unexpected response format"));
+    }
+
+    #[test]
+    fn map_chat_completions_error_detects_context_length() {
+        let body =
+            r#"{"error":{"message":"This model's maximum context length is 128000 tokens"}}"#;
+        let error = map_chat_completions_error(StatusCode::BAD_REQUEST, body);
+        assert!(error.contains("transcript may be too long"));
+        assert!(error.contains("128000"));
+    }
+
+    #[test]
+    fn map_chat_completions_error_detects_too_many_tokens() {
+        let body = r#"{"error":{"message":"Too many tokens in the request"}}"#;
+        let error = map_chat_completions_error(StatusCode::BAD_REQUEST, body);
+        assert!(error.contains("transcript may be too long"));
+    }
+
+    #[test]
+    fn map_chat_completions_error_generic_bad_request() {
+        let body = r#"{"error":{"message":"Invalid request format"}}"#;
+        let error = map_chat_completions_error(StatusCode::BAD_REQUEST, body);
+        assert!(error.contains("rejected"));
+        assert!(error.contains("Invalid request format"));
+    }
+
+    #[test]
+    fn map_chat_completions_error_auth_failure() {
+        let error = map_chat_completions_error(
+            StatusCode::UNAUTHORIZED,
+            r#"{"error":{"message":"Incorrect API key"}}"#,
+        );
+        assert!(error.contains("API key"));
+        assert!(error.contains("Incorrect API key"));
+    }
+
+    #[test]
+    fn map_chat_completions_error_not_found() {
+        let error = map_chat_completions_error(StatusCode::NOT_FOUND, "");
+        assert!(error.contains("chat completions"));
+        assert!(error.contains("not found"));
+    }
+
+    #[test]
+    fn map_chat_completions_error_rate_limit() {
+        let error = map_chat_completions_error(StatusCode::TOO_MANY_REQUESTS, "");
+        assert!(error.contains("rate limit"));
+    }
+
+    #[test]
+    fn map_chat_completions_error_server_error() {
+        let error = map_chat_completions_error(StatusCode::INTERNAL_SERVER_ERROR, "");
+        assert!(error.contains("server error"));
+        assert!(error.contains("500"));
     }
 }
