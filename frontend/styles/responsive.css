@@ -1,0 +1,37 @@
+@media (max-width: 860px) {
+  .shell {
+    padding: 1rem;
+  }
+
+  .frame {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+  }
+
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .postprocess-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .import-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .transcript-output {
+    min-height: 260px;
+  }
+
+  .segments-list {
+    max-height: none;
+  }
+}
