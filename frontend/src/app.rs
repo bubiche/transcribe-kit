@@ -132,6 +132,7 @@ pub fn App() -> impl IntoView {
                 <div class="screen" class:screen-active=move || active_screen.get() == Screen::PostProcess>
                     <PostProcessScreen
                         active=Signal::derive(move || active_screen.get() == Screen::PostProcess)
+                        transcription=transcription
                     />
                 </div>
                 <div class="screen" class:screen-active=move || active_screen.get() == Screen::Settings>

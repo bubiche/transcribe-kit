@@ -1,16 +1,29 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::tauri_api::{list_templates, save_templates, PostProcessTemplate};
+use crate::features::transcription::format_timestamp;
+use crate::features::transcription::TranscriptionController;
+use crate::tauri_api::{
+    list_templates, run_postprocess, save_templates, write_clipboard_text, PostProcessTemplate,
+    TranscriptResult,
+};
 
 #[component]
-pub fn PostProcessScreen(active: Signal<bool>) -> impl IntoView {
+pub fn PostProcessScreen(
+    active: Signal<bool>,
+    transcription: TranscriptionController,
+) -> impl IntoView {
     let templates = RwSignal::new(Vec::<PostProcessTemplate>::new());
     let selected_template_id = RwSignal::new(None::<String>);
     let editing_name = RwSignal::new(String::new());
     let editing_prompt = RwSignal::new(String::new());
     let is_new_template = RwSignal::new(false);
     let save_feedback = RwSignal::new(None::<String>);
+
+    let is_running = RwSignal::new(false);
+    let result_text = RwSignal::new(None::<String>);
+    let error_message = RwSignal::new(None::<String>);
+    let copy_feedback = RwSignal::new(None::<&'static str>);
 
     let apply_selection = move |id: Option<String>, source: &[PostProcessTemplate]| {
         selected_template_id.set(id.clone());
@@ -146,6 +159,97 @@ pub fn PostProcessScreen(active: Signal<bool>) -> impl IntoView {
     let has_templates = Signal::derive(move || !templates.get().is_empty());
     let has_selection = Signal::derive(move || selected_template_id.get().is_some());
 
+    let transcript_signal = Signal::derive(move || transcription.transcript.get());
+    let transcript_text = Signal::derive(move || {
+        transcript_signal
+            .get()
+            .map(|r| r.text.clone())
+            .unwrap_or_default()
+    });
+    let has_transcript = Signal::derive(move || {
+        transcript_signal
+            .get()
+            .map(|r| !r.text.trim().is_empty())
+            .unwrap_or(false)
+    });
+
+    let can_run =
+        Signal::derive(move || has_transcript.get() && has_selection.get() && !is_running.get());
+
+    let run_button_label = Signal::derive(move || {
+        if is_running.get() {
+            "Processing..."
+        } else {
+            "Run post-processing"
+        }
+    });
+
+    let on_run_postprocess = move |_| {
+        let Some(template_id) = selected_template_id.get_untracked() else {
+            return;
+        };
+        let text = transcript_text.get_untracked();
+        if text.trim().is_empty() {
+            return;
+        }
+
+        is_running.set(true);
+        error_message.set(None);
+        result_text.set(None);
+        copy_feedback.set(None);
+
+        spawn_local(async move {
+            match run_postprocess(text, template_id).await {
+                Ok(processed) => {
+                    result_text.set(Some(processed.clone()));
+                    // Write back to TranscriptionController
+                    transcription.transcript.update(|opt| {
+                        if let Some(result) = opt.as_mut() {
+                            result.post_processed_text = Some(processed);
+                        }
+                    });
+                }
+                Err(err) => {
+                    error_message.set(Some(err));
+                }
+            }
+            is_running.set(false);
+        });
+    };
+
+    // Track which transcription the current postprocess result belongs to.
+    // When a new transcription completes (nonce changes), clear stale state.
+    let last_seen_nonce = RwSignal::new(transcription.completion_nonce.get_untracked());
+
+    Effect::new(move |_| {
+        let current_nonce = transcription.completion_nonce.get();
+        let previous_nonce = last_seen_nonce.get_untracked();
+
+        if current_nonce != previous_nonce {
+            last_seen_nonce.set(current_nonce);
+            result_text.set(None);
+            error_message.set(None);
+            copy_feedback.set(None);
+        }
+    });
+
+    // Restore previously processed text when navigating back
+    Effect::new(move |_| {
+        if !active.get() {
+            return;
+        }
+        if result_text.get_untracked().is_some() {
+            return;
+        }
+        if let Some(existing) = transcription
+            .transcript
+            .get_untracked()
+            .and_then(|r| r.post_processed_text)
+        {
+            result_text.set(Some(existing));
+        }
+    });
+
     view! {
         <section class="panel content">
             <div class="hero">
@@ -255,20 +359,155 @@ pub fn PostProcessScreen(active: Signal<bool>) -> impl IntoView {
                                     </p>
                                 </div>
                             </Show>
+
+                            <button
+                                class="primary-button postprocess-run-button"
+                                on:click=on_run_postprocess
+                                disabled=move || !can_run.get()
+                            >
+                                {move || run_button_label.get()}
+                            </button>
+
+                            <Show when=move || !has_transcript.get()>
+                                <p class="field-hint">
+                                    "No transcript available. Complete a transcription first."
+                                </p>
+                            </Show>
                         </div>
                     </section>
                 </div>
 
                 <div class="postprocess-result-column">
-                    <section class="section postprocess-result-placeholder">
-                        <p class="tag">"Output"</p>
-                        <h3>"Post-processed result"</h3>
-                        <p class="body-copy">
-                            "Run post-processing to see results here. Select a template and use the transcript from the Transcription screen."
-                        </p>
-                    </section>
+                    <PostprocessTranscriptPreview transcript=transcript_signal />
+                    <PostprocessResultPanel
+                        result_text=result_text
+                        error_message=error_message
+                        is_running=is_running
+                        copy_feedback=copy_feedback
+                    />
                 </div>
             </div>
+        </section>
+    }
+}
+
+#[component]
+fn PostprocessTranscriptPreview(transcript: Signal<Option<TranscriptResult>>) -> impl IntoView {
+    let has_transcript = Signal::derive(move || transcript.get().is_some());
+
+    view! {
+        <section class="section">
+            <p class="tag">"Source"</p>
+            <h3>"Transcript preview"</h3>
+
+            <Show
+                when=move || has_transcript.get()
+                fallback=|| {
+                    view! {
+                        <p class="body-copy postprocess-empty-hint">
+                            "No transcript available. Complete a transcription on the Transcription screen first."
+                        </p>
+                    }
+                }
+            >
+                {move || {
+                    transcript.get().map(|result| {
+                        let provider = result.source.provider.clone();
+                        let model_id = result.source.model_id.clone();
+                        let duration_label = result
+                            .source
+                            .duration_ms
+                            .map(|ms| format_timestamp(ms as i64))
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        let text = result.text.clone();
+
+                        view! {
+                            <div class="stack">
+                                <div class="mini-status">
+                                    <span class="mini-chip">{format!("Engine: {provider}")}</span>
+                                    <span class="mini-chip">{format!("Model: {model_id}")}</span>
+                                    <span class="mini-chip">{format!("Duration: {duration_label}")}</span>
+                                </div>
+                                <div class="postprocess-transcript-preview">{text}</div>
+                            </div>
+                        }
+                    })
+                }}
+            </Show>
+        </section>
+    }
+}
+
+#[component]
+fn PostprocessResultPanel(
+    result_text: RwSignal<Option<String>>,
+    error_message: RwSignal<Option<String>>,
+    is_running: RwSignal<bool>,
+    copy_feedback: RwSignal<Option<&'static str>>,
+) -> impl IntoView {
+    let has_result = Signal::derive(move || result_text.get().is_some());
+    let has_error = Signal::derive(move || error_message.get().is_some());
+
+    let copy_button_label = Signal::derive(move || copy_feedback.get().unwrap_or("Copy result"));
+    let copy_button_class = Signal::derive(move || match copy_feedback.get() {
+        Some("Copied") => "secondary-button success",
+        Some("Copy failed") => "secondary-button error",
+        _ => "secondary-button",
+    });
+
+    let on_copy = move |_: leptos::ev::MouseEvent| {
+        let Some(text) = result_text.get_untracked() else {
+            return;
+        };
+        copy_feedback.set(None);
+
+        spawn_local(async move {
+            match write_clipboard_text(&text).await {
+                Ok(()) => copy_feedback.set(Some("Copied")),
+                Err(_) => copy_feedback.set(Some("Copy failed")),
+            }
+        });
+    };
+
+    view! {
+        <section class="section">
+            <p class="tag">"Output"</p>
+            <h3>"Post-processed result"</h3>
+
+            <Show when=move || is_running.get()>
+                <div class="postprocess-loading">
+                    <div class="postprocess-spinner"></div>
+                    <p class="body-copy">"Sending transcript to the API for processing..."</p>
+                </div>
+            </Show>
+
+            <Show when=move || has_error.get()>
+                <div class="postprocess-error">
+                    <p class="body-copy">{move || error_message.get().unwrap_or_default()}</p>
+                </div>
+            </Show>
+
+            <Show when=move || has_result.get()>
+                <div class="stack">
+                    <div class="result-toolbar">
+                        <div class="copy-actions">
+                            <button
+                                class=move || copy_button_class.get()
+                                on:click=on_copy
+                            >
+                                {move || copy_button_label.get()}
+                            </button>
+                        </div>
+                    </div>
+                    <div class="postprocess-output">{move || result_text.get().unwrap_or_default()}</div>
+                </div>
+            </Show>
+
+            <Show when=move || !has_result.get() && !has_error.get() && !is_running.get()>
+                <p class="body-copy postprocess-empty-hint">
+                    "Select a template and run post-processing to see results here."
+                </p>
+            </Show>
         </section>
     }
 }

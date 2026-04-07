@@ -15,6 +15,7 @@ use crate::tauri_api::{
 pub use self::controller::TranscriptionController;
 pub use self::panels::{JobStatusPanel, TranscriptResultPanel};
 use self::utils::file_name_from_path;
+pub use self::utils::format_timestamp;
 
 #[component]
 pub fn TranscribeScreen(

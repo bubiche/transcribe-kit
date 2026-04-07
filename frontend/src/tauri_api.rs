@@ -417,6 +417,26 @@ struct SaveTemplatesArgs {
     templates: Vec<PostProcessTemplate>,
 }
 
+pub async fn run_postprocess(
+    transcript_text: String,
+    template_id: String,
+) -> Result<String, String> {
+    invoke_command(
+        "run_postprocess",
+        RunPostprocessArgs {
+            transcript_text,
+            template_id,
+        },
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RunPostprocessArgs {
+    transcript_text: String,
+    template_id: String,
+}
+
 pub async fn get_model_status(model_id: &str) -> Result<ModelStatus, String> {
     invoke_command(
         "get_model_status",
