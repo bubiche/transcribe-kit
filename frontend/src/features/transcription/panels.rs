@@ -3,6 +3,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
 
+use crate::features::navigation::Screen;
 use crate::live_recording::format_duration;
 use crate::tauri_api::LiveRecordingState;
 use crate::tauri_api::{
@@ -79,6 +80,7 @@ pub fn JobStatusPanel(
 pub fn TranscriptResultPanel(
     active: Signal<bool>,
     controller: TranscriptionController,
+    active_screen: RwSignal<Screen>,
     live_recording_state: Signal<LiveRecordingState>,
     live_recording_label: Signal<String>,
     live_recording_elapsed_ms: Signal<u64>,
@@ -118,6 +120,11 @@ pub fn TranscriptResultPanel(
 
     let can_copy =
         Signal::derive(move || can_copy_transcript(is_listening.get(), &plain_copy_text.get()));
+    let show_postprocess_button = Signal::derive(move || {
+        !is_listening.get()
+            && !controller.is_transcribing.get()
+            && controller.transcript.with(|opt| opt.is_some())
+    });
     let plain_button_class = Signal::derive(move || {
         if copy_feedback_target.get() == Some("plain") {
             if copy_feedback_error.get() {
@@ -273,6 +280,14 @@ pub fn TranscriptResultPanel(
                             disabled=move || !can_copy.get()
                         >
                             {move || timestamp_button_label.get()}
+                        </button>
+                    </Show>
+                    <Show when=move || show_postprocess_button.get()>
+                        <button
+                            class="secondary-button"
+                            on:click=move |_| active_screen.set(Screen::PostProcess)
+                        >
+                            "Post-process"
                         </button>
                     </Show>
                 </div>

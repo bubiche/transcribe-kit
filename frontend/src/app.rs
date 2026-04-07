@@ -122,6 +122,7 @@ pub fn App() -> impl IntoView {
                 <div class="screen" class:screen-active=move || active_screen.get() == Screen::Transcribe>
                     <TranscribeScreen
                         active=Signal::derive(move || active_screen.get() == Screen::Transcribe)
+                        active_screen=active_screen
                         transcription=transcription
                         live_recording=live_recording
                         live_recording_state=live_recording_state

@@ -173,6 +173,22 @@ pub fn PostProcessScreen(
             .unwrap_or(false)
     });
 
+    let had_result_on_load = RwSignal::new(false);
+
+    // Track whether the transcript already had a post-processed result when
+    // the screen was activated (i.e., from a previous run, not the current one).
+    Effect::new(move |_| {
+        if !active.get() {
+            return;
+        }
+        let has = transcription.transcript.with(|opt| {
+            opt.as_ref()
+                .and_then(|r| r.post_processed_text.as_ref())
+                .is_some()
+        });
+        had_result_on_load.set(has);
+    });
+
     let can_run =
         Signal::derive(move || has_transcript.get() && has_selection.get() && !is_running.get());
 
@@ -357,6 +373,13 @@ pub fn PostProcessScreen(
                                     <p class="body-copy">
                                         "No templates found. Create your first template or they will be restored on next app launch."
                                     </p>
+                                </div>
+                            </Show>
+
+                            <Show when=move || had_result_on_load.get()>
+                                <div class="postprocess-previous-chip">
+                                    <span class="mini-chip">"Previously processed"</span>
+                                    <span class="field-hint">"You can re-run with the same or a different template."</span>
                                 </div>
                             </Show>
 
