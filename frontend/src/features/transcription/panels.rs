@@ -264,6 +264,18 @@ pub fn TranscriptResultPanel(
                     "Live transcript ready"
                 </div>
             </Show>
+            <Show
+                when=move || is_listening.get()
+                fallback=move || {
+                    view! { <TranscriptPanelBody controller=controller /> }
+                }
+            >
+                <ListeningIndicator
+                    live_recording_label=live_recording_label
+                    live_recording_elapsed_ms=live_recording_elapsed_ms
+                />
+            </Show>
+
             <div class="result-toolbar">
                 <div class="copy-actions">
                     <button
@@ -284,7 +296,7 @@ pub fn TranscriptResultPanel(
                     </Show>
                     <Show when=move || show_postprocess_button.get()>
                         <button
-                            class="secondary-button"
+                            class="secondary-button postprocess-nav-button"
                             on:click=move |_| active_screen.set(Screen::PostProcess)
                         >
                             "Post-process"
@@ -292,18 +304,6 @@ pub fn TranscriptResultPanel(
                     </Show>
                 </div>
             </div>
-
-            <Show
-                when=move || is_listening.get()
-                fallback=move || {
-                    view! { <TranscriptPanelBody controller=controller /> }
-                }
-            >
-                <ListeningIndicator
-                    live_recording_label=live_recording_label
-                    live_recording_elapsed_ms=live_recording_elapsed_ms
-                />
-            </Show>
         </section>
     }
 }

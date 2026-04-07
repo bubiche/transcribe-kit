@@ -432,6 +432,7 @@ pub async fn run_postprocess(
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RunPostprocessArgs {
     transcript_text: String,
     template_id: String,

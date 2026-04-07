@@ -783,6 +783,11 @@ body {
   gap: 1rem;
 }
 
+.capture-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .job-status-panel {
   padding: 1rem;
   border-radius: 18px;
@@ -986,10 +991,26 @@ body {
   gap: 0.85rem;
 }
 
+.transcript-result-section > .result-toolbar {
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(21, 35, 24, 0.08);
+}
+
 .copy-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem;
+}
+
+.postprocess-nav-button {
+  background: linear-gradient(135deg, rgba(31, 122, 77, 0.08), rgba(31, 122, 77, 0.14));
+  border-color: rgba(31, 122, 77, 0.22);
+  color: #1b774a;
+}
+
+.postprocess-nav-button:hover {
+  background: linear-gradient(135deg, rgba(31, 122, 77, 0.14), rgba(31, 122, 77, 0.22));
+  border-color: rgba(31, 122, 77, 0.34);
 }
 
 .secondary-button {
