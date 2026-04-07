@@ -10,14 +10,16 @@ use crate::{
     models::{
         ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType, LiveCaptureProfile,
         LiveRecordingResult, LiveRecordingStatus, LocalModelDescriptor, ModelDownloadProgress,
-        ModelStatus, ProviderMode, SaveSettingsRequest, StartFileTranscriptionRequest,
-        TranscribeLiveRecordingRequest, TranscriptResult, TranscriptionStreamEvent,
+        ModelStatus, PostProcessTemplate, ProviderMode, SaveSettingsRequest,
+        StartFileTranscriptionRequest, TranscribeLiveRecordingRequest, TranscriptResult,
+        TranscriptionStreamEvent,
     },
     providers::{
         api_openai_compatible::{resolve_effective_model_name, ApiCredentials},
         local_whisper,
     },
     settings::SettingsStore,
+    templates::TemplateStore,
     transcription::{
         cleanup_temporary_live_recording, file_source_name, finalize_live_transcription_result,
         live_source_name, transcribe_api_audio_path, transcribe_local_audio_path,
@@ -346,6 +348,19 @@ pub async fn preload_local_model(
     tokio::task::spawn_blocking(move || get_or_load_engine(&engine_cache, &model_id).map(|_| ()))
         .await
         .map_err(|e| format!("Model preload task failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn list_templates(store: State<'_, TemplateStore>) -> Vec<PostProcessTemplate> {
+    store.load()
+}
+
+#[tauri::command]
+pub fn save_templates(
+    templates: Vec<PostProcessTemplate>,
+    store: State<'_, TemplateStore>,
+) -> Result<(), String> {
+    store.save(&templates).map_err(|error| error.to_string())
 }
 
 fn load_api_credentials(

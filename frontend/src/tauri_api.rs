@@ -171,6 +171,7 @@ pub struct AppSettings {
     pub api_base_url: String,
     pub api_key_present: bool,
     pub hotkey_registration_error: Option<String>,
+    pub postprocess_model: String,
 }
 
 impl Default for AppSettings {
@@ -187,6 +188,7 @@ impl Default for AppSettings {
             api_base_url: "https://api.openai.com/v1".to_string(),
             api_key_present: false,
             hotkey_registration_error: None,
+            postprocess_model: "gpt-4o-mini".to_string(),
         }
     }
 }
@@ -204,6 +206,7 @@ pub struct SaveSettingsRequest {
     pub api_base_url: String,
     pub api_key: Option<String>,
     pub clear_api_key: bool,
+    pub postprocess_model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -248,6 +251,13 @@ pub struct ApiModelDescriptor {
     pub label: String,
     pub provider: String,
     pub supports_custom_name: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostProcessTemplate {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -392,6 +402,19 @@ pub async fn save_settings(request: SaveSettingsRequest) -> Result<AppSettings, 
 #[derive(Debug, Clone, Serialize)]
 struct SaveSettingsArgs {
     request: SaveSettingsRequest,
+}
+
+pub async fn list_templates() -> Result<Vec<PostProcessTemplate>, String> {
+    invoke_command("list_templates", ()).await
+}
+
+pub async fn save_templates(templates: Vec<PostProcessTemplate>) -> Result<(), String> {
+    invoke_command("save_templates", SaveTemplatesArgs { templates }).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SaveTemplatesArgs {
+    templates: Vec<PostProcessTemplate>,
 }
 
 pub async fn get_model_status(model_id: &str) -> Result<ModelStatus, String> {

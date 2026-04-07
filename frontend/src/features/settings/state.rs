@@ -22,6 +22,7 @@ pub struct SettingsFormState {
     pub api_key_input: RwSignal<String>,
     pub clear_api_key: RwSignal<bool>,
     pub api_key_present: RwSignal<bool>,
+    pub postprocess_model: RwSignal<String>,
 }
 
 impl SettingsFormState {
@@ -39,6 +40,7 @@ impl SettingsFormState {
             api_key_input: RwSignal::new(String::new()),
             clear_api_key: RwSignal::new(false),
             api_key_present: RwSignal::new(false),
+            postprocess_model: RwSignal::new("gpt-4o-mini".to_string()),
         }
     }
 
@@ -55,6 +57,7 @@ impl SettingsFormState {
             .set(settings.api_custom_model_name);
         self.api_base_url.set(settings.api_base_url);
         self.api_key_present.set(settings.api_key_present);
+        self.postprocess_model.set(settings.postprocess_model);
         self.api_key_input.set(String::new());
         self.clear_api_key.set(false);
     }
@@ -79,6 +82,7 @@ impl SettingsFormState {
                 }
             },
             clear_api_key: self.clear_api_key.get(),
+            postprocess_model: self.postprocess_model.get(),
         }
     }
 }

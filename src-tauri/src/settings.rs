@@ -49,6 +49,8 @@ struct StoredSettings {
     api_model_id: String,
     api_custom_model_name: String,
     api_base_url: String,
+    #[serde(default = "default_postprocess_model")]
+    postprocess_model: String,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +84,7 @@ impl Default for StoredSettings {
             api_model_id: defaults.api_model_id,
             api_custom_model_name: defaults.api_custom_model_name,
             api_base_url: defaults.api_base_url,
+            postprocess_model: defaults.postprocess_model,
         }
     }
 }
@@ -117,6 +120,7 @@ impl SettingsStore {
             api_base_url: stored.api_base_url,
             api_key_present,
             hotkey_registration_error: None,
+            postprocess_model: stored.postprocess_model,
         })
     }
 
@@ -142,6 +146,7 @@ impl SettingsStore {
             api_model_id: request.api_model_id,
             api_custom_model_name: request.api_custom_model_name,
             api_base_url: normalize_base_url(&request.api_base_url),
+            postprocess_model: request.postprocess_model,
         };
 
         let api_key = request
@@ -307,6 +312,10 @@ fn validate_settings(
     Ok(())
 }
 
+fn default_postprocess_model() -> String {
+    AppSettings::default().postprocess_model
+}
+
 fn default_hotkey_mode() -> HotkeyMode {
     AppSettings::default().hotkey_mode
 }
@@ -402,6 +411,7 @@ mod tests {
                 api_base_url: "https://api.openai.com/v1".to_string(),
                 api_key: None,
                 clear_api_key: false,
+                postprocess_model: "gpt-4o-mini".to_string(),
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
@@ -428,6 +438,7 @@ mod tests {
                 api_base_url: "https://api.openai.com/v1".to_string(),
                 api_key: Some("secret".to_string()),
                 clear_api_key: false,
+                postprocess_model: "gpt-4o-mini".to_string(),
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
@@ -460,6 +471,7 @@ mod tests {
                 api_model_id: "gpt-4o-mini-transcribe".to_string(),
                 api_custom_model_name: String::new(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
+                postprocess_model: "gpt-4o-mini".to_string(),
             })
             .expect("write settings");
 
@@ -483,6 +495,7 @@ mod tests {
                 api_base_url: "https://api.openai.com/v1".to_string(),
                 api_key: None,
                 clear_api_key: false,
+                postprocess_model: "gpt-4o-mini".to_string(),
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
@@ -509,6 +522,7 @@ mod tests {
                 api_base_url: "https://api.openai.com/v1".to_string(),
                 api_key: None,
                 clear_api_key: false,
+                postprocess_model: "gpt-4o-mini".to_string(),
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
@@ -561,5 +575,29 @@ mod tests {
             }
             other => panic!("expected keyring invalid error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn existing_settings_without_postprocess_model_deserialize_with_default() {
+        let (_temp_dir, store) = temp_store();
+
+        // Simulate a settings file written before postprocess_model existed
+        let legacy_json = serde_json::json!({
+            "provider_mode": "local",
+            "local_model_id": "whisper-base",
+            "selected_input_device_id": null,
+            "live_capture_profile": "microphone-only",
+            "hotkey_mode": "push-to-talk",
+            "hotkey_shortcut": "CmdOrCtrl+Shift+T",
+            "api_model_id": "gpt-4o-mini-transcribe",
+            "api_custom_model_name": "",
+            "api_base_url": "https://api.openai.com/v1"
+        });
+        fs::write(&store.config_path, legacy_json.to_string()).expect("write legacy settings");
+
+        let stored: StoredSettings =
+            serde_json::from_str(&fs::read_to_string(&store.config_path).unwrap()).unwrap();
+
+        assert_eq!(stored.postprocess_model, "gpt-4o-mini");
     }
 }

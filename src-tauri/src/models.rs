@@ -52,6 +52,7 @@ pub struct AppSettings {
     pub api_base_url: String,
     pub api_key_present: bool,
     pub hotkey_registration_error: Option<String>,
+    pub postprocess_model: String,
 }
 
 impl Default for AppSettings {
@@ -68,6 +69,7 @@ impl Default for AppSettings {
             api_base_url: "https://api.openai.com/v1".to_string(),
             api_key_present: false,
             hotkey_registration_error: None,
+            postprocess_model: "gpt-4o-mini".to_string(),
         }
     }
 }
@@ -85,6 +87,7 @@ pub struct SaveSettingsRequest {
     pub api_base_url: String,
     pub api_key: Option<String>,
     pub clear_api_key: bool,
+    pub postprocess_model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,6 +132,13 @@ pub struct ApiModelDescriptor {
     pub label: String,
     pub provider: String,
     pub supports_custom_name: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostProcessTemplate {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

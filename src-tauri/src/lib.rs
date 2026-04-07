@@ -8,6 +8,7 @@ mod models;
 mod providers;
 mod recording_tray;
 mod settings;
+mod templates;
 mod transcription;
 
 use engine::LocalEngineState;
@@ -15,10 +16,12 @@ use hotkeys::HotkeyManagerState;
 use live_recording::LiveRecordingManagerState;
 use settings::SettingsStore;
 use tauri::Manager;
+use templates::TemplateStore;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let settings_store = SettingsStore::new().expect("settings store");
+    let template_store = TemplateStore::new().expect("template store");
     let preload_settings_store = settings_store.clone();
     let engine_state = LocalEngineState::new();
     let preload_engine_state = engine_state.clone();
@@ -28,6 +31,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(settings_store)
+        .manage(template_store)
         .manage(engine_state)
         .manage(hotkey_state)
         .manage(live_recording_state)
@@ -49,7 +53,9 @@ pub fn run() {
             commands::start_live_transcription,
             commands::stop_live_transcription,
             commands::start_file_transcription,
-            commands::transcribe_live_recording
+            commands::transcribe_live_recording,
+            commands::list_templates,
+            commands::save_templates
         ])
         .setup(move |app| {
             let main_window = app.get_webview_window("main").expect("main window");
