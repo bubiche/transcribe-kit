@@ -21,10 +21,6 @@ pub enum TranscriptionError {
     ApiRequest(String),
 }
 
-pub trait TranscribeLocal: Send + Sync {
-    fn transcribe_pcm(&self, samples: &[f32]) -> Result<TranscriptResult, TranscriptionError>;
-}
-
 pub async fn transcribe_api_audio_file(
     file_path: &Path,
     model_id: &str,

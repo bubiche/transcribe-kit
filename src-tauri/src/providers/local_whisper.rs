@@ -8,7 +8,7 @@ use whisper_rs::{
     FullParams, SamplingStrategy, SegmentCallbackData, WhisperContext, WhisperContextParameters,
 };
 
-use super::{TranscribeLocal, TranscriptionError};
+use super::TranscriptionError;
 use crate::models::{
     InputType, ModelDownloadProgress, ModelStatus, TranscriptResult, TranscriptSegment,
     TranscriptionSource,
@@ -36,16 +36,6 @@ impl WhisperEngine {
 
     pub fn model_id(&self) -> &str {
         &self.model_id
-    }
-}
-
-impl TranscribeLocal for WhisperEngine {
-    fn transcribe_pcm(&self, samples: &[f32]) -> Result<TranscriptResult, TranscriptionError> {
-        self.transcribe_pcm_streaming(
-            samples,
-            None::<fn(i32)>,
-            None::<fn(i32, TranscriptSegment, String)>,
-        )
     }
 }
 
@@ -334,8 +324,4 @@ async fn do_download(
     });
 
     Ok(final_path.clone())
-}
-
-pub fn is_available() -> bool {
-    true
 }

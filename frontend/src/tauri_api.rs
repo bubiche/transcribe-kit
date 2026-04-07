@@ -230,13 +230,6 @@ pub struct LocalModelDescriptor {
     pub size_label: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ModelStatus {
-    pub model_id: String,
-    pub downloaded: bool,
-    pub size_bytes: Option<u64>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelDownloadProgress {
     pub model_id: String,
@@ -436,16 +429,6 @@ pub async fn run_postprocess(
 struct RunPostprocessArgs {
     transcript_text: String,
     template_id: String,
-}
-
-pub async fn get_model_status(model_id: &str) -> Result<ModelStatus, String> {
-    invoke_command(
-        "get_model_status",
-        ModelIdArg {
-            model_id: model_id.to_string(),
-        },
-    )
-    .await
 }
 
 pub async fn delete_model(model_id: &str) -> Result<(), String> {
