@@ -390,7 +390,8 @@ mod tests {
         assert_eq!(settings.hotkey_mode, HotkeyMode::PushToTalk);
         assert_eq!(settings.hotkey_shortcut, "CmdOrCtrl+Shift+T");
         assert_eq!(settings.api_model_id, "gpt-4o-mini-transcribe");
-        assert!(!settings.api_key_present);
+        // api_key_present is derived from the system keyring, not stored
+        // settings, so it depends on external state and is not asserted here.
         assert_eq!(settings.hotkey_registration_error, None);
     }
 
