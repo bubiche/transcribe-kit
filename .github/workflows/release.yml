@@ -132,9 +132,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          files=$(find artifacts -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.deb' \) | sort)
+          readarray -d '' files < <(find artifacts -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.deb' \) -print0 | sort -z)
           echo "Uploading:"
-          echo "$files"
+          printf '%s\n' "${files[@]}"
 
           draft_flag=""
           if [ "${{ inputs.draft }}" = "true" ]; then
@@ -145,4 +145,4 @@ jobs:
             --title "Transcribe Kit v${{ inputs.version }}" \
             --generate-notes \
             $draft_flag \
-            $files
+            "${files[@]}"
