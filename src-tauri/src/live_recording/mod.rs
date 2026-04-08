@@ -130,7 +130,7 @@ impl LiveRecordingManagerState {
     }
 
     pub fn current_status(&self) -> LiveRecordingStatus {
-        let guard = self.inner.lock().unwrap();
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard
             .active
             .as_ref()
@@ -145,7 +145,7 @@ impl LiveRecordingManagerState {
         is_output_loopback: bool,
         use_dual_capture: bool,
     ) -> Result<LiveRecordingStatus, LiveRecordingError> {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
         if guard.active.is_some() {
             return Err(LiveRecordingError::AlreadyRecording);
@@ -188,7 +188,7 @@ impl LiveRecordingManagerState {
         app: &AppHandle<R>,
     ) -> Result<LiveRecordingResult, LiveRecordingError> {
         let active = {
-            let mut guard = self.inner.lock().unwrap();
+            let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             guard
                 .active
                 .take()
@@ -310,7 +310,7 @@ impl SingleStreamRecording {
             Err(_) => return Err(LiveRecordingError::WriterThreadPanicked),
         }
 
-        let runtime_error = runtime_error.lock().unwrap().clone();
+        let runtime_error = runtime_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(runtime_error) = runtime_error {
             let _ = fs::remove_file(&output_file_path);
             return Err(LiveRecordingError::StreamRuntime(runtime_error));
@@ -525,8 +525,8 @@ impl DualStreamRecording {
 
         let mic_writer_result = join_writer_thread(mic_writer_thread);
         let loopback_writer_result = join_writer_thread(loopback_writer_thread);
-        let mic_runtime_error = mic_runtime_error.lock().unwrap().clone();
-        let loopback_runtime_error = loopback_runtime_error.lock().unwrap().clone();
+        let mic_runtime_error = mic_runtime_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let loopback_runtime_error = loopback_runtime_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         if let Err(error) = mic_writer_result {
             let _ = fs::remove_file(&mic_temp_path);
@@ -620,7 +620,7 @@ impl DualStreamRecording {
     }
 
     fn status(&self) -> LiveRecordingStatus {
-        let message = self.mic_runtime_error.lock().unwrap().clone().or_else(|| {
+        let message = self.mic_runtime_error.lock().unwrap_or_else(|e| e.into_inner()).clone().or_else(|| {
             self.loopback_runtime_error
                 .lock()
                 .unwrap()
@@ -938,7 +938,7 @@ where
 {
     let error_runtime = Arc::clone(&runtime_error);
     let error_callback = move |error: cpal::StreamError| {
-        let mut guard = error_runtime.lock().unwrap();
+        let mut guard = error_runtime.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             *guard = Some(with_platform_hint(error.to_string()));
         }
@@ -979,7 +979,7 @@ fn capture_chunk<T>(
         .map(i16::from_sample)
         .collect::<Vec<_>>();
     if let Err(error) = writer_tx.send(chunk) {
-        let mut guard = runtime_error.lock().unwrap();
+        let mut guard = runtime_error.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             *guard = Some(format!(
                 "Transcribe Kit stopped receiving audio input data: {error}"

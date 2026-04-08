@@ -46,7 +46,7 @@ impl HotkeyManagerState {
     }
 
     pub fn registration_error(&self) -> Option<String> {
-        self.inner.lock().unwrap().last_error.clone()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).last_error.clone()
     }
 
     pub fn initialize_from_settings<R: Runtime>(
@@ -76,10 +76,10 @@ impl HotkeyManagerState {
         mode: HotkeyMode,
     ) -> Result<String, String> {
         let normalized_shortcut = validate_shortcut(shortcut)?;
-        let previous_shortcut = self.inner.lock().unwrap().shortcut.clone();
+        let previous_shortcut = self.inner.lock().unwrap_or_else(|e| e.into_inner()).shortcut.clone();
 
         if previous_shortcut.as_deref() == Some(normalized_shortcut.as_str()) {
-            let mut guard = self.inner.lock().unwrap();
+            let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             guard.mode = mode;
             guard.last_error = None;
             return Ok(normalized_shortcut);
@@ -109,7 +109,7 @@ impl HotkeyManagerState {
             }
         }
 
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.shortcut = Some(normalized_shortcut.clone());
         guard.mode = mode;
         guard.last_error = None;
@@ -140,7 +140,7 @@ impl HotkeyManagerState {
             }
         }
 
-        let mode = self.inner.lock().unwrap().mode;
+        let mode = self.inner.lock().unwrap_or_else(|e| e.into_inner()).mode;
         let _ = app.emit(
             HOTKEY_EVENT_NAME,
             HotkeyEventPayload {
@@ -153,7 +153,7 @@ impl HotkeyManagerState {
     }
 
     fn set_error(&self, error: Option<String>) {
-        self.inner.lock().unwrap().last_error = error;
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).last_error = error;
     }
 }
 

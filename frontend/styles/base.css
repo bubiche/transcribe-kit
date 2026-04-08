@@ -360,6 +360,11 @@ body {
   color: #b48232;
 }
 
+.field-badge-warn {
+  background: rgba(200, 80, 40, 0.12);
+  color: #b84520;
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;

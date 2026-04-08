@@ -24,6 +24,8 @@ pub enum SettingsError {
     ParseFile(#[source] serde_json::Error),
     #[error("Could not write the settings file: {0}")]
     WriteFile(#[source] std::io::Error),
+    #[error("Could not serialize settings: {0}")]
+    SerializeFile(#[source] serde_json::Error),
     #[error("{0}")]
     Validation(String),
     #[error("Could not access the system credential store: {0}")]
@@ -33,6 +35,7 @@ pub enum SettingsError {
 #[derive(Debug, Clone)]
 pub struct SettingsStore {
     config_path: PathBuf,
+    keyring_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,6 +54,8 @@ struct StoredSettings {
     api_base_url: String,
     #[serde(default = "default_postprocess_model")]
     postprocess_model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_key_plaintext: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +90,7 @@ impl Default for StoredSettings {
             api_custom_model_name: defaults.api_custom_model_name,
             api_base_url: defaults.api_base_url,
             postprocess_model: defaults.postprocess_model,
+            api_key_plaintext: None,
         }
     }
 }
@@ -94,19 +100,41 @@ impl SettingsStore {
         let project_dirs = ProjectDirs::from("dev", "transcribe-kit", "transcribe-kit")
             .ok_or(SettingsError::MissingConfigDir)?;
 
+        let keyring_available = Entry::new(KEYCHAIN_SERVICE, "probe")
+            .and_then(|entry| entry.get_password().or_else(|e| match e {
+                keyring::Error::NoEntry => Ok(String::new()),
+                other => Err(other),
+            }))
+            .is_ok();
+
+        if !keyring_available {
+            eprintln!(
+                "System keyring is not available. API keys will be stored in the settings file \
+                 (unencrypted). Install a keyring service for secure storage."
+            );
+        }
+
         Ok(Self {
             config_path: project_dirs.config_dir().join("settings.json"),
+            keyring_available,
         })
+    }
+
+    pub fn keyring_available(&self) -> bool {
+        self.keyring_available
     }
 
     #[cfg(test)]
     fn with_path(path: PathBuf) -> Self {
-        Self { config_path: path }
+        Self {
+            config_path: path,
+            keyring_available: false,
+        }
     }
 
     pub fn load(&self) -> Result<AppSettings, SettingsError> {
         let stored = self.read_stored_settings()?;
-        let api_key_present = self.has_api_key(&stored.api_base_url)?;
+        let api_key_present = self.has_api_key(&stored)?;
 
         Ok(AppSettings {
             provider_mode: stored.provider_mode,
@@ -119,6 +147,7 @@ impl SettingsStore {
             api_custom_model_name: stored.api_custom_model_name,
             api_base_url: stored.api_base_url,
             api_key_present,
+            api_key_insecure: !self.keyring_available && api_key_present,
             hotkey_registration_error: None,
             postprocess_model: stored.postprocess_model,
         })
@@ -132,6 +161,9 @@ impl SettingsStore {
         input_device_ids: &[String],
     ) -> Result<PreparedSettingsSave, SettingsError> {
         validate_settings(&request, local_model_ids, api_model_ids, input_device_ids)?;
+
+        // Preserve existing plaintext key from file if present
+        let existing_plaintext = self.read_stored_settings()?.api_key_plaintext;
 
         let stored = StoredSettings {
             provider_mode: request.provider_mode,
@@ -147,6 +179,7 @@ impl SettingsStore {
             api_custom_model_name: request.api_custom_model_name,
             api_base_url: normalize_base_url(&request.api_base_url),
             postprocess_model: request.postprocess_model,
+            api_key_plaintext: existing_plaintext,
         };
 
         let api_key = request
@@ -158,7 +191,7 @@ impl SettingsStore {
 
         if matches!(stored.provider_mode, ProviderMode::Api)
             && api_key.is_none()
-            && (request.clear_api_key || !self.has_api_key(&stored.api_base_url)?)
+            && (request.clear_api_key || !self.has_api_key(&stored)?)
         {
             return Err(SettingsError::Validation(
                 "An API key is required when API transcription is selected.".to_string(),
@@ -176,15 +209,28 @@ impl SettingsStore {
         &self,
         prepared: PreparedSettingsSave,
     ) -> Result<AppSettings, SettingsError> {
+        let mut stored = prepared.stored;
+
         if prepared.clear_api_key {
-            self.delete_api_key(&prepared.stored.api_base_url)?;
+            self.delete_api_key(&stored.api_base_url)?;
+            if !self.keyring_available {
+                stored.api_key_plaintext = None;
+            }
         }
 
         if let Some(api_key) = prepared.api_key.as_deref() {
-            self.set_api_key(&prepared.stored.api_base_url, api_key)?;
+            self.set_api_key(&stored.api_base_url, api_key)?;
+            if !self.keyring_available {
+                stored.api_key_plaintext = Some(api_key.to_string());
+            }
         }
 
-        self.write_stored_settings(&prepared.stored)?;
+        // When keyring IS available, never persist the key in the file
+        if self.keyring_available {
+            stored.api_key_plaintext = None;
+        }
+
+        self.write_stored_settings(&stored)?;
 
         self.load()
     }
@@ -218,36 +264,65 @@ impl SettingsStore {
         }
 
         let contents =
-            serde_json::to_string_pretty(settings).expect("stored settings serialization is valid");
+            serde_json::to_string_pretty(settings).map_err(SettingsError::SerializeFile)?;
         fs::write(&self.config_path, contents).map_err(SettingsError::WriteFile)
     }
 
-    fn has_api_key(&self, base_url: &str) -> Result<bool, SettingsError> {
-        match self.entry(base_url).get_password() {
-            Ok(password) => Ok(!password.trim().is_empty()),
-            Err(keyring::Error::NoEntry) => Ok(false),
-            Err(error) => Err(SettingsError::Keyring(error)),
+    fn has_api_key(&self, stored: &StoredSettings) -> Result<bool, SettingsError> {
+        if self.keyring_available {
+            if let Some(entry) = self.entry(&stored.api_base_url) {
+                return match entry.get_password() {
+                    Ok(password) => Ok(!password.trim().is_empty()),
+                    Err(keyring::Error::NoEntry) => Ok(false),
+                    Err(error) => Err(SettingsError::Keyring(error)),
+                };
+            }
         }
+        // File fallback
+        Ok(stored.api_key_plaintext.as_ref().is_some_and(|k| !k.trim().is_empty()))
     }
 
     pub fn get_api_key(&self, base_url: &str) -> Result<String, SettingsError> {
-        map_retrieved_api_key(self.entry(base_url).get_password())
+        if self.keyring_available {
+            if let Some(entry) = self.entry(base_url) {
+                return map_retrieved_api_key(entry.get_password());
+            }
+        }
+        // File fallback
+        let stored = self.read_stored_settings()?;
+        match stored.api_key_plaintext {
+            Some(key) if !key.trim().is_empty() => Ok(key.trim().to_string()),
+            _ => Err(SettingsError::Validation(
+                "No API key is stored for the configured API base URL.".to_string(),
+            )),
+        }
     }
 
     fn set_api_key(&self, base_url: &str, api_key: &str) -> Result<(), SettingsError> {
-        self.entry(base_url).set_password(api_key)?;
+        if self.keyring_available {
+            if let Some(entry) = self.entry(base_url) {
+                entry.set_password(api_key)?;
+                return Ok(());
+            }
+        }
+        // File fallback — written as part of StoredSettings in commit_save
         Ok(())
     }
 
     fn delete_api_key(&self, base_url: &str) -> Result<(), SettingsError> {
-        match self.entry(base_url).delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(SettingsError::Keyring(error)),
+        if self.keyring_available {
+            if let Some(entry) = self.entry(base_url) {
+                match entry.delete_credential() {
+                    Ok(()) | Err(keyring::Error::NoEntry) => return Ok(()),
+                    Err(error) => return Err(SettingsError::Keyring(error)),
+                }
+            }
         }
+        Ok(())
     }
 
-    fn entry(&self, base_url: &str) -> Entry {
-        Entry::new(KEYCHAIN_SERVICE, &credential_account(base_url)).expect("keyring entry")
+    fn entry(&self, base_url: &str) -> Option<Entry> {
+        Entry::new(KEYCHAIN_SERVICE, &credential_account(base_url)).ok()
     }
 }
 
@@ -473,6 +548,7 @@ mod tests {
                 api_custom_model_name: String::new(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
                 postprocess_model: "gpt-4o-mini".to_string(),
+                api_key_plaintext: None,
             })
             .expect("write settings");
 

@@ -21,7 +21,7 @@ pub(crate) fn get_or_load_engine(
     engine_cache: &Arc<Mutex<Option<WhisperEngine>>>,
     model_id: &str,
 ) -> Result<WhisperEngine, String> {
-    let mut guard = engine_cache.lock().unwrap();
+    let mut guard = engine_cache.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(ref engine) = *guard {
         if engine.model_id() == model_id {
             return Ok(engine.clone());

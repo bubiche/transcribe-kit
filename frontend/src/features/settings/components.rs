@@ -904,7 +904,11 @@ pub(super) fn ApiConnectionCard(state: SettingsFeatureState) -> impl IntoView {
                     <span class="field-label">
                         "API key"
                         {move || if state.form.api_key_present.get() {
-                            view! { <span class="field-badge field-badge-ok">"Saved"</span> }.into_any()
+                            if state.form.api_key_insecure.get() {
+                                view! { <span class="field-badge field-badge-warn">"Saved (unencrypted)"</span> }.into_any()
+                            } else {
+                                view! { <span class="field-badge field-badge-ok">"Saved"</span> }.into_any()
+                            }
                         } else {
                             view! { <span class="field-badge field-badge-missing">"Not set"</span> }.into_any()
                         }}

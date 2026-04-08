@@ -20,10 +20,34 @@ use settings::SettingsStore;
 use tauri::Manager;
 use templates::TemplateStore;
 
+fn fatal_dialog(message: &str) -> ! {
+    eprintln!("Fatal: {message}");
+    // Best-effort native dialog — rfd works without a Tauri app handle.
+    #[cfg(not(test))]
+    {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Transcribe Kit — startup error")
+            .set_description(message)
+            .show();
+    }
+    std::process::exit(1);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let settings_store = SettingsStore::new().expect("settings store");
-    let template_store = TemplateStore::new().expect("template store");
+    let settings_store = match SettingsStore::new() {
+        Ok(store) => store,
+        Err(error) => fatal_dialog(&format!(
+            "Could not initialize settings: {error}\n\nTranscribe Kit will now exit."
+        )),
+    };
+    let template_store = match TemplateStore::new() {
+        Ok(store) => store,
+        Err(error) => fatal_dialog(&format!(
+            "Could not initialize templates: {error}\n\nTranscribe Kit will now exit."
+        )),
+    };
     let preload_settings_store = settings_store.clone();
     let engine_state = LocalEngineState::new();
     let preload_engine_state = engine_state.clone();

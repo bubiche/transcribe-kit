@@ -66,7 +66,7 @@ impl AudioMonitorState {
         app: &AppHandle<R>,
         selected_device_id: Option<&str>,
     ) -> Result<(), AudioMonitorError> {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
         // Stop any existing monitor first (handles device switching).
         guard.take();
@@ -122,7 +122,7 @@ impl AudioMonitorState {
     }
 
     pub fn stop(&self) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.take(); // Drop triggers cleanup via ActiveMonitor::drop
     }
 }

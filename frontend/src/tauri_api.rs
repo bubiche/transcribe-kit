@@ -194,6 +194,8 @@ pub struct AppSettings {
     pub api_custom_model_name: String,
     pub api_base_url: String,
     pub api_key_present: bool,
+    #[serde(default)]
+    pub api_key_insecure: bool,
     pub hotkey_registration_error: Option<String>,
     pub postprocess_model: String,
 }
@@ -211,6 +213,7 @@ impl Default for AppSettings {
             api_custom_model_name: String::new(),
             api_base_url: "https://api.openai.com/v1".to_string(),
             api_key_present: false,
+            api_key_insecure: false,
             hotkey_registration_error: None,
             postprocess_model: "gpt-4o-mini".to_string(),
         }
