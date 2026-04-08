@@ -16,7 +16,8 @@
         "title": "Transcribe Kit",
         "width": 1100,
         "height": 760,
-        "resizable": true
+        "resizable": true,
+        "devtools": true
       }
     ],
     "security": {
