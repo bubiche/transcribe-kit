@@ -86,7 +86,7 @@ pub fn list_input_devices() -> Result<Vec<AudioInputDeviceDescriptor>, InputDevi
 pub fn platform_supports_output_loopback() -> bool {
     #[cfg(target_os = "windows")]
     {
-        return true;
+        true
     }
 
     #[cfg(target_os = "macos")]
