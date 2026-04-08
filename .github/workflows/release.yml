@@ -23,9 +23,37 @@ env:
   CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"
 
 jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.create-release.outputs.release_id }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create draft release
+        id: create-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          release_id=$(gh api repos/${{ github.repository }}/releases \
+            --method POST \
+            --field tag_name="v${{ inputs.version }}" \
+            --field name="Transcribe Kit v${{ inputs.version }}" \
+            --field draft=true \
+            --field generate_release_notes=true \
+            --jq '.id')
+          echo "release_id=$release_id" >> $GITHUB_OUTPUT
+
   build:
     name: Build (${{ matrix.name }})
+    needs: create-release
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -33,23 +61,15 @@ jobs:
           - name: macOS (Apple Silicon)
             os: macos-latest
             target: aarch64-apple-darwin
-            bundle_ext: dmg
-            bundle_dir: dmg
           - name: macOS (Intel)
             os: macos-latest
             target: x86_64-apple-darwin
-            bundle_ext: dmg
-            bundle_dir: dmg
           - name: Windows
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            bundle_ext: msi
-            bundle_dir: msi
           - name: Linux
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            bundle_ext: deb
-            bundle_dir: deb
 
     steps:
       - uses: actions/checkout@v6
@@ -58,10 +78,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }},wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-${{ matrix.target }}
 
       - name: Install trunk
         uses: taiki-e/install-action@v2
@@ -101,48 +117,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: --target ${{ matrix.target }}
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: bundle-${{ matrix.target }}
-          path: |
-            target/${{ matrix.target }}/release/bundle/${{ matrix.bundle_dir }}/*.${{ matrix.bundle_ext }}
-            target/${{ matrix.target }}/release/bundle/nsis/*.exe
-          if-no-files-found: error
-
-  release:
-    name: Create Release
-    needs: build
+  publish-release:
+    name: Publish Release
+    needs: [create-release, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    if: ${{ inputs.draft == false }}
 
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Create GitHub Release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          readarray -d '' files < <(find artifacts -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.deb' \) -print0 | sort -z)
-          echo "Uploading:"
-          printf '%s\n' "${files[@]}"
-
-          draft_flag=""
-          if [ "${{ inputs.draft }}" = "true" ]; then
-            draft_flag="--draft"
-          fi
-
-          gh release create "v${{ inputs.version }}" \
-            --title "Transcribe Kit v${{ inputs.version }}" \
-            --generate-notes \
-            $draft_flag \
-            "${files[@]}"
+          gh api repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }} \
+            --method PATCH \
+            --field draft=false
