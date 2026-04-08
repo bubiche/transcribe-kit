@@ -415,6 +415,11 @@ pub async fn run_postprocess(
 #[tauri::command]
 pub fn write_text_file(path: String, content: String) -> Result<(), String> {
     let file_path = Path::new(&path);
+    for component in file_path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err("File path must not contain \"..\" components.".to_string());
+        }
+    }
     if let Some(parent) = file_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {e}"))?;
     }

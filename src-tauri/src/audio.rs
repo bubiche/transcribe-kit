@@ -29,17 +29,14 @@ pub fn decode_audio_file(path: &Path) -> Result<DecodedAudio, TranscriptionError
     if is_ogg_path(path) {
         match decode_ogg_opus_file(path) {
             Ok(decoded) => return Ok(decoded),
-            Err(opus_error) => {
-                let symphonia_result = decode_with_symphonia(path);
-                if symphonia_result.is_ok() {
-                    return symphonia_result;
+            Err(opus_error) => match decode_with_symphonia(path) {
+                Ok(decoded) => return Ok(decoded),
+                Err(symphonia_error) => {
+                    return Err(TranscriptionError::AudioDecode(format!(
+                        "{opus_error}. Symphonia fallback also failed: {symphonia_error}"
+                    )));
                 }
-
-                return Err(TranscriptionError::AudioDecode(format!(
-                    "{opus_error}. Symphonia fallback also failed: {}",
-                    symphonia_result.err().unwrap()
-                )));
-            }
+            },
         }
     }
 

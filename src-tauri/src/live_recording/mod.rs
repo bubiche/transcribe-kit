@@ -347,7 +347,7 @@ impl SingleStreamRecording {
             message: self
                 .runtime_error
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .clone()
                 .or_else(|| self.startup_message.clone()),
         }

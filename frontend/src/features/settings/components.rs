@@ -609,14 +609,18 @@ fn AudioLevelMeter(
 
         if !visible {
             spawn_local(async move {
-                let _ = stop_audio_monitor().await;
+                if let Err(e) = stop_audio_monitor().await {
+                    web_sys::console::error_1(&format!("Failed to stop audio monitor: {e}").into());
+                }
             });
             audio_level.set(0.0);
             return;
         }
 
         spawn_local(async move {
-            let _ = start_audio_monitor(device_id).await;
+            if let Err(e) = start_audio_monitor(device_id).await {
+                web_sys::console::error_1(&format!("Failed to start audio monitor: {e}").into());
+            }
         });
     });
 
@@ -639,7 +643,11 @@ fn AudioLevelMeter(
     on_cleanup(move || {
         listener_active.set(false);
         spawn_local(async move {
-            let _ = stop_audio_monitor().await;
+            if let Err(e) = stop_audio_monitor().await {
+                web_sys::console::error_1(
+                    &format!("Failed to stop audio monitor on cleanup: {e}").into(),
+                );
+            }
         });
     });
 

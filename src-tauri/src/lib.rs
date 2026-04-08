@@ -90,8 +90,9 @@ pub fn run() {
             commands::write_text_file
         ])
         .setup(move |app| {
-            let main_window = app.get_webview_window("main").expect("main window");
-            main_window.set_title("Transcribe Kit")?;
+            if let Some(main_window) = app.get_webview_window("main") {
+                let _ = main_window.set_title("Transcribe Kit");
+            }
             if let Err(error) = recording_tray::initialize(app.handle()) {
                 eprintln!("Failed to initialize tray icon: {error}");
             }
