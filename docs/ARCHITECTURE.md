@@ -2,27 +2,177 @@
 
 ## App Layers
 
-- Leptos frontend for UX and state management in Rust
-- Tauri + Rust runtime for OS integrations, global hotkeys, audio, and local inference orchestration
-- Provider adapters for local models (Whisper, Parakeet) and API models (OpenAI-compatible)
+- **Leptos frontend** (WASM) for UX, reactive state management, and user interaction
+- **Tauri + Rust backend** for OS integrations, global hotkeys, audio capture, and local inference orchestration
+- **Provider adapters** for local models (Whisper.cpp via whisper-rs) and cloud APIs (OpenAI-compatible endpoints)
+
+## Workspace Layout
+
+```
+transcribe-kit/
+├── Cargo.toml               # Workspace root (members: frontend, src-tauri)
+├── Makefile.toml             # cargo-make task runner (dev, build, test, clippy)
+├── Trunk.toml                # WASM bundler config (serves on :1420)
+├── frontend/                 # Leptos CSR frontend crate
+│   ├── index.html
+│   ├── styles/
+│   └── src/
+└── src-tauri/                # Tauri backend crate
+    ├── tauri.conf.json
+    └── src/
+```
+
+## Frontend (`frontend/src/`)
+
+Leptos client-side rendered app compiled to WebAssembly. Communicates with the backend via `wasm-bindgen` FFI calls to Tauri's invoke system.
+
+```
+src/
+├── main.rs                          # Entry point, mounts App to DOM
+├── app.rs                           # Root component, screen routing, hotkey/recording banners
+├── tauri_api.rs                     # Backend bridge: all IPC types, commands, and event listeners
+├── features/
+│   ├── mod.rs                       # Re-exports feature modules
+│   ├── transcription.rs             # Transcription screen (file picker, provider check, job launch)
+│   ├── transcription/
+│   │   ├── controller.rs            # TranscriptionController: job state signals, stream event handling
+│   │   ├── panels.rs                # JobStatusPanel, TranscriptResultPanel (copy, timestamps)
+│   │   └── utils.rs                 # Formatting helpers (timestamps, durations, filenames)
+│   ├── postprocess.rs               # Post-processing screen: template CRUD, LLM execution, result display
+│   └── settings/
+│       ├── mod.rs
+│       ├── screen.rs                # Settings panel: layout, effects (auto-save, preload)
+│       ├── state.rs                 # SettingsFeatureState: form signals, debounced save, download tracking
+│       ├── components.rs            # Provider/model/device/hotkey/API settings cards
+│       ├── input_device_hints.rs    # Classify devices (physical mic, loopback, virtual cable, etc.)
+│       └── meeting_capture.rs       # Platform-specific meeting readiness hints and guidance
+└── live_recording/
+    ├── mod.rs                       # LiveRecordingController: event listeners, goal reconciliation
+    ├── device_context.rs            # Resolve armed device label, detect dual-capture readiness
+    ├── recording_goal.rs            # Map hotkey events to Start/Stop commands (push-to-talk vs toggle)
+    ├── timing.rs                    # Elapsed duration, wall-clock helpers
+    ├── transcription_flow.rs        # State transitions on recording stop and transcription completion
+    └── tests.rs
+```
+
+### State Management
+
+- All mutable state uses Leptos `RwSignal<T>` (reactive read-write signals)
+- Controller pattern: `TranscriptionController`, `LiveRecordingController`, `SettingsFeatureState` are `Copy + Clone` structs wrapping signals
+- Data flows: user action -> signal update -> effect -> Tauri command -> response -> signal update -> re-render
+- Backend events (`hotkey activity`, `recording status`, `audio levels`) are received via `listen_to_app_event()` and routed into signals
+
+## Backend (`src-tauri/src/`)
+
+Tauri v2 app with Rust backend. Manages audio I/O, model lifecycle, transcription providers, and persistent configuration.
+
+```
+src/
+├── main.rs                          # Binary entry point
+├── lib.rs                           # App init: state setup, plugin registration, command registration
+├── models.rs                        # Shared data types (AppSettings, TranscriptResult, descriptors, etc.)
+├── commands.rs                      # IPC command handlers (~20 commands exposed to frontend)
+├── engine.rs                        # LocalEngineState: Whisper model cache (load once, reuse)
+├── transcription.rs                 # Orchestration: route to local or API, decode audio, stream results
+├── audio.rs                         # Multi-codec decoding (Symphonia + Opus fallback), MP3 encoding
+├── settings.rs                      # JSON config persistence + system keyring for API keys
+├── templates.rs                     # Post-processing template storage and rendering
+├── hotkeys.rs                       # Global shortcut registration, press/release event emission
+├── input_devices.rs                 # CPAL device enumeration, output loopback detection
+├── audio_monitor.rs                 # Real-time RMS/peak audio level monitoring thread
+├── recording_tray.rs                # System tray icon: idle/recording states, context menu
+├── providers/
+│   ├── mod.rs                       # Provider interface, TranscriptionError type
+│   ├── local_whisper.rs             # Whisper.cpp adapter: model download, load, streaming inference
+│   ├── api_openai_compatible.rs     # OpenAI-compatible API: transcription + chat completions
+│   └── local_parakeet.rs            # Placeholder for future Parakeet integration
+└── live_recording/
+    ├── mod.rs                       # LiveRecordingManager: single-stream and dual-stream capture
+    └── wav_mixing.rs                # Mix mic + loopback WAV files, WAV metadata helpers
+```
+
+### Tauri-Managed State
+
+All state is thread-safe (`Arc<Mutex<T>>`), injected via Tauri's state system:
+
+| State | Purpose |
+|-------|---------|
+| `SettingsStore` | Persistent config + keyring access |
+| `TemplateStore` | Post-processing templates |
+| `LocalEngineState` | Cached Whisper model instance |
+| `HotkeyManagerState` | Current hotkey binding and errors |
+| `LiveRecordingManagerState` | Active recording session |
+| `AudioMonitorState` | Active audio monitor stream |
+
+### Events Emitted to Frontend
+
+| Event | Payload | Purpose |
+|-------|---------|---------|
+| `transcribe-kit://live-recording-status` | `LiveRecordingStatus` | Recording start/stop notifications |
+| `transcribe-kit://live-recording-hotkey` | Shortcut, mode, state | Global hotkey press/release |
+| `transcribe-kit://audio-level` | `{ rms, peak }` | Audio level meter updates (~66ms) |
 
 ## Key Runtime Paths
 
-- Audio file transcription path
-- Live mic capture path with push-to-talk or toggle
-- Post-processing path with prompt templates and custom instructions
+### File Transcription
+1. User picks audio file via system dialog
+2. Provider readiness check (model downloaded or API key present)
+3. **Local path**: decode to 16kHz mono PCM -> Whisper inference with streaming segments
+4. **API path**: compress to MP3 if >24MB -> upload to OpenAI-compatible endpoint
+5. Display transcript with timestamps, copy, and post-process options
 
-## Planned Modules
+### Live Recording + Transcription
+1. Global hotkey or UI button triggers recording goal
+2. Goal reconciliation: desired state vs current state -> Start/Stop command
+3. **Single stream**: capture from selected input device to WAV
+4. **Dual stream** (meeting mix): capture mic + system loopback -> mix into single WAV
+5. On stop: hand WAV to transcription pipeline (same local/API routing as file path)
+6. Auto-navigate to transcript on completion
 
-- `frontend/src/features/audio.rs`: device selection and recording controls
-- `frontend/src/features/transcription.rs`: model/provider selection and transcript display
-- `frontend/src/features/postprocess.rs`: prompt templates and output controls
-- `frontend/src/app.rs`: primary desktop shell UI
-- `src-tauri/src/providers`: local and API transcription adapters
-- `src-tauri/src/commands.rs`: frontend-callable command surface
+### Post-Processing
+1. User selects or creates a template (prompt with `{{transcript}}` placeholder)
+2. Template rendered with transcript text
+3. Sent to OpenAI-compatible chat completions endpoint
+4. Result displayed with copy support
+
+## Audio Pipeline
+
+- **Decoding**: Symphonia (MP3, FLAC, WAV, M4A, WebM) + custom Opus/OGG fallback
+- **Normalization**: all audio resampled to 16kHz mono f32 for Whisper
+- **Compression**: re-encode to 64kbps MP3 for API uploads exceeding 24MB
+- **Live capture**: CPAL streams -> mpsc channels -> WAV writer threads
+- **Dual capture**: separate mic and loopback WAV files mixed post-recording
+
+## Supported Whisper Models
+
+| Model ID | Approx Size |
+|----------|-------------|
+| whisper-tiny | ~75 MB |
+| whisper-base | ~148 MB |
+| whisper-small | ~488 MB |
+| whisper-large-v3-turbo | ~809 MB |
+
+Downloaded from Hugging Face, cached at `~/.cache/transcribe-kit/models/`.
 
 ## Build Tooling
 
-- `cargo` manages both crates in one workspace
-- `trunk` serves and builds the Leptos client-side app
-- `cargo tauri` wraps the desktop build lifecycle
+- **cargo-make** (`Makefile.toml`): task runner for `dev`, `build`, `test`, `clippy`, `setup`
+- **Trunk**: serves and builds the Leptos WASM frontend (port 1420)
+- **cargo tauri**: wraps the full desktop build lifecycle
+- **No JS tooling**: pure Rust ecosystem, no package.json/webpack/vite
+
+### Commands
+
+```sh
+cargo make setup    # Install wasm32 target, Trunk, Tauri CLI
+cargo make dev      # Run in dev mode (hot reload)
+cargo make build    # Production build
+cargo make test     # fmt-check + clippy + unit tests
+```
+
+## Persistence
+
+- **Settings**: `~/.config/transcribe-kit/settings.json`
+- **API keys**: system keyring (`dev.transcribekit.desktop` service)
+- **Templates**: `~/.config/transcribe-kit/templates.json`
+- **Models**: `~/.cache/transcribe-kit/models/`
