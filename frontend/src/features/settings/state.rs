@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use wasm_bindgen::JsCast;
 
 use crate::tauri_api::{
     delete_model, ensure_model_downloaded, get_settings, list_api_models, list_input_devices,
@@ -7,6 +8,15 @@ use crate::tauri_api::{
     AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile, LocalModelDescriptor, ProviderMode,
     SaveSettingsRequest,
 };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AutoSaveStatus {
+    Idle,
+    Pending,
+    Saving,
+    Saved,
+    Error,
+}
 
 #[derive(Clone, Copy)]
 pub struct SettingsFormState {
@@ -133,13 +143,17 @@ pub struct SettingsFeatureState {
     pub input_devices: RwSignal<Vec<AudioInputDeviceDescriptor>>,
     pub api_models: RwSignal<Vec<ApiModelDescriptor>>,
     pub load_error: RwSignal<Option<String>>,
-    pub save_feedback: RwSignal<Option<String>>,
     pub hotkey_registration_error: RwSignal<Option<String>>,
     pub is_loading: RwSignal<bool>,
     pub is_saving: RwSignal<bool>,
     pub download: DownloadState,
     pub warming_model_id: RwSignal<Option<String>>,
     pub warmed_model_id: RwSignal<Option<String>>,
+    pub suppress_auto_save: RwSignal<bool>,
+    pub auto_save_generation: RwSignal<u64>,
+    pub auto_save_status: RwSignal<AutoSaveStatus>,
+    pub auto_save_error: RwSignal<Option<String>>,
+    pub api_key_save_requested: RwSignal<u64>,
 }
 
 impl SettingsFeatureState {
@@ -150,13 +164,17 @@ impl SettingsFeatureState {
             input_devices: RwSignal::new(Vec::new()),
             api_models: RwSignal::new(Vec::new()),
             load_error: RwSignal::new(None),
-            save_feedback: RwSignal::new(None),
             hotkey_registration_error: RwSignal::new(None),
             is_loading: RwSignal::new(true),
             is_saving: RwSignal::new(false),
             download: DownloadState::new(),
             warming_model_id: RwSignal::new(None),
             warmed_model_id: RwSignal::new(None),
+            suppress_auto_save: RwSignal::new(true),
+            auto_save_generation: RwSignal::new(0),
+            auto_save_status: RwSignal::new(AutoSaveStatus::Idle),
+            auto_save_error: RwSignal::new(None),
+            api_key_save_requested: RwSignal::new(0),
         }
     }
 
@@ -179,6 +197,7 @@ impl SettingsFeatureState {
     pub fn load(self) {
         spawn_local(async move {
             self.is_loading.set(true);
+            self.suppress_auto_save.set(true);
             self.load_error.set(None);
 
             let local_result = list_local_models().await;
@@ -217,32 +236,71 @@ impl SettingsFeatureState {
             }
 
             self.is_loading.set(false);
+            self.deferred_unsuppress_auto_save();
         });
     }
 
+    /// Release the auto-save suppression via `setTimeout(0)` so that any
+    /// Leptos effects batched from the preceding signal writes run while
+    /// `suppress_auto_save` is still `true`, preventing a spurious save.
+    fn deferred_unsuppress_auto_save(self) {
+        let unsuppress = wasm_bindgen::closure::Closure::once_into_js(move || {
+            self.suppress_auto_save.set(false);
+        });
+        if let Some(window) = web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                unsuppress.as_ref().unchecked_ref(),
+                0,
+            );
+        }
+    }
+
     pub fn save(self, on_saved: impl Fn() + 'static) {
+        if self.is_saving.get_untracked() {
+            return;
+        }
+
         let request = self.form.build_save_request();
 
         spawn_local(async move {
             self.is_saving.set(true);
-            self.save_feedback.set(None);
+            self.auto_save_status.set(AutoSaveStatus::Saving);
+            self.auto_save_error.set(None);
 
             match save_settings(request).await {
                 Ok(settings) => {
+                    self.suppress_auto_save.set(true);
                     self.hotkey_registration_error
                         .set(settings.hotkey_registration_error.clone());
                     self.form.apply_settings(settings);
-                    self.save_feedback.set(Some(
-                        "Settings saved. The recording hotkey stays registered even while the app is in the background.".to_string(),
-                    ));
+                    self.deferred_unsuppress_auto_save();
+
+                    self.auto_save_status.set(AutoSaveStatus::Saved);
                     on_saved();
+
+                    // Reset status to Idle after 2 seconds
+                    let saved_gen = self.auto_save_generation.get_untracked();
+                    let timeout_closure =
+                        wasm_bindgen::closure::Closure::once_into_js(move || {
+                            if self.auto_save_generation.get_untracked() == saved_gen {
+                                self.auto_save_status.set(AutoSaveStatus::Idle);
+                            }
+                        });
+                    if let Some(window) = web_sys::window() {
+                        let _ = window
+                            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                timeout_closure.as_ref().unchecked_ref(),
+                                2000,
+                            );
+                    }
                 }
                 Err(error) => {
                     if let Ok(settings) = get_settings().await {
                         self.hotkey_registration_error
                             .set(settings.hotkey_registration_error.clone());
                     }
-                    self.save_feedback.set(Some(error));
+                    self.auto_save_error.set(Some(error));
+                    self.auto_save_status.set(AutoSaveStatus::Error);
                 }
             }
 

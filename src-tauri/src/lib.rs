@@ -1,4 +1,5 @@
 mod audio;
+mod audio_monitor;
 mod commands;
 mod engine;
 mod hotkeys;
@@ -11,6 +12,7 @@ mod settings;
 mod templates;
 mod transcription;
 
+use audio_monitor::AudioMonitorState;
 use engine::LocalEngineState;
 use hotkeys::HotkeyManagerState;
 use live_recording::LiveRecordingManagerState;
@@ -28,6 +30,7 @@ pub fn run() {
     let hotkey_state = HotkeyManagerState::new();
     let preload_hotkey_state = hotkey_state.clone();
     let live_recording_state = LiveRecordingManagerState::new();
+    let audio_monitor_state = AudioMonitorState::new();
 
     tauri::Builder::default()
         .manage(settings_store)
@@ -35,6 +38,7 @@ pub fn run() {
         .manage(engine_state)
         .manage(hotkey_state)
         .manage(live_recording_state)
+        .manage(audio_monitor_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -56,7 +60,9 @@ pub fn run() {
             commands::transcribe_live_recording,
             commands::list_templates,
             commands::save_templates,
-            commands::run_postprocess
+            commands::run_postprocess,
+            commands::start_audio_monitor,
+            commands::stop_audio_monitor
         ])
         .setup(move |app| {
             let main_window = app.get_webview_window("main").expect("main window");

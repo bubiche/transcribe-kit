@@ -118,10 +118,10 @@ struct DualStreamRecording {
     input_device_label: String,
 }
 
-struct ResolvedInputDevice {
-    device: Device,
-    input_device_id: Option<String>,
-    input_device_label: String,
+pub(crate) struct ResolvedInputDevice {
+    pub(crate) device: Device,
+    pub(crate) input_device_id: Option<String>,
+    pub(crate) input_device_label: String,
 }
 
 impl LiveRecordingManagerState {
@@ -663,7 +663,7 @@ fn emit_status<R: Runtime>(app: &AppHandle<R>, status: &LiveRecordingStatus) {
     let _ = app.emit(LIVE_RECORDING_STATUS_EVENT_NAME, status);
 }
 
-fn resolve_input_device(
+pub(crate) fn resolve_input_device(
     selected_input_device_id: Option<&str>,
 ) -> Result<ResolvedInputDevice, LiveRecordingError> {
     if let Some(selected_input_device_id) = selected_input_device_id
@@ -700,7 +700,7 @@ fn resolve_input_device(
     }
 }
 
-fn device_label(device: &Device, fallback_id: Option<&str>) -> String {
+pub(crate) fn device_label(device: &Device, fallback_id: Option<&str>) -> String {
     device
         .description()
         .map(|description| description.name().to_string())

@@ -1,16 +1,21 @@
 use leptos::prelude::*;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 use crate::live_recording::LiveRecordingController;
 use crate::tauri_api::{HotkeyMode, ProviderMode};
 
 use super::components::{
-    ApiConnectionCard, CaptureProfileField, HotkeySettingsCard, InputDeviceField,
-    ProviderSettingsCard, SettingsActionsCard,
+    ApiConnectionCard, AutoSaveIndicator, CaptureProfileField, HotkeySettingsCard,
+    InputDeviceField, ProviderSettingsCard,
 };
-use super::state::SettingsFeatureState;
+use super::state::{AutoSaveStatus, SettingsFeatureState};
 
 #[component]
-pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView {
+pub fn SettingsScreen(
+    live_recording: LiveRecordingController,
+    show_settings: RwSignal<bool>,
+) -> impl IntoView {
     let state = SettingsFeatureState::new();
 
     Effect::new(move |_| {
@@ -22,6 +27,65 @@ pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView 
         state.form.local_model_id.get();
         state.local_models.get();
         state.maybe_preload_selected_local_model();
+    });
+
+    // Debounced auto-save: subscribe to all form signals except api_key_input
+    let controller = live_recording;
+    Effect::new(move |_| {
+        let _ = state.form.provider_mode.get();
+        let _ = state.form.local_model_id.get();
+        let _ = state.form.selected_input_device_id.get();
+        let _ = state.form.live_capture_profile.get();
+        let _ = state.form.hotkey_mode.get();
+        let _ = state.form.hotkey_shortcut.get();
+        let _ = state.form.api_model_id.get();
+        let _ = state.form.api_custom_model_name.get();
+        let _ = state.form.api_base_url.get();
+        let _ = state.form.clear_api_key.get();
+        let _ = state.form.postprocess_model.get();
+
+        if state.suppress_auto_save.get_untracked()
+            || state.is_loading.get_untracked()
+            || state.is_saving.get_untracked()
+        {
+            return;
+        }
+
+        let next_gen = state
+            .auto_save_generation
+            .get_untracked()
+            .saturating_add(1);
+        state.auto_save_generation.set(next_gen);
+        state.auto_save_status.set(AutoSaveStatus::Pending);
+
+        let timeout_closure = Closure::once_into_js(move || {
+            if state.auto_save_generation.get_untracked() != next_gen {
+                return;
+            }
+            if state.suppress_auto_save.get_untracked() || state.is_saving.get_untracked() {
+                return;
+            }
+            state.save(move || controller.refresh_armed_device_context());
+        });
+
+        if let Some(window) = web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                timeout_closure.as_ref().unchecked_ref(),
+                800,
+            );
+        }
+    });
+
+    // Immediate save on API key blur
+    Effect::new(move |_| {
+        let gen = state.api_key_save_requested.get();
+        if gen == 0
+            || state.suppress_auto_save.get_untracked()
+            || state.is_loading.get_untracked()
+        {
+            return;
+        }
+        state.save(move || controller.refresh_armed_device_context());
     });
 
     let custom_api_selected = state.custom_api_selected();
@@ -50,10 +114,6 @@ pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView 
         };
         format!("{mode_label} on {}", state.form.hotkey_shortcut.get())
     });
-    let save_configuration = move |_| {
-        let controller = live_recording;
-        state.save(move || controller.refresh_armed_device_context());
-    };
 
     view! {
         <section class="panel content">
@@ -83,7 +143,6 @@ pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView 
                             state=state
                             custom_api_selected=custom_api_selected
                         />
-                        <ApiConnectionCard state=state />
                         <CaptureProfileField
                             live_capture_profile=state.form.live_capture_profile
                         />
@@ -91,15 +150,13 @@ pub fn SettingsScreen(live_recording: LiveRecordingController) -> impl IntoView 
                             selected_input_device_id=state.form.selected_input_device_id
                             input_devices=state.input_devices
                             live_capture_profile=state.form.live_capture_profile
+                            settings_visible=Signal::derive(move || show_settings.get())
                         />
+                        <ApiConnectionCard state=state />
                     </div>
                     <div class="settings-sidebar">
                         <HotkeySettingsCard state=state />
-                        <SettingsActionsCard
-                            is_saving=state.is_saving
-                            save_feedback=state.save_feedback
-                            on_save=save_configuration
-                        />
+                        <AutoSaveIndicator state=state />
                     </div>
                 </div>
             </Show>

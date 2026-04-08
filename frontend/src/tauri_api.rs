@@ -633,6 +633,29 @@ fn parse_transcription_stream_event(value: &JsValue) -> Option<TranscriptionStre
     }
 }
 
+pub const AUDIO_LEVEL_EVENT_NAME: &str = "transcribe-kit://audio-level";
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AudioLevelEvent {
+    pub rms: f32,
+    #[allow(dead_code)]
+    pub peak: f32,
+}
+
+pub async fn start_audio_monitor(device_id: Option<String>) -> Result<(), String> {
+    invoke_command("start_audio_monitor", StartAudioMonitorArgs { device_id }).await
+}
+
+pub async fn stop_audio_monitor() -> Result<(), String> {
+    invoke_command("stop_audio_monitor", ()).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartAudioMonitorArgs {
+    device_id: Option<String>,
+}
+
 fn js_error_message(error: impl Into<JsValue>) -> String {
     let value = error.into();
 

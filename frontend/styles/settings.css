@@ -37,9 +37,35 @@
   margin: 0;
 }
 
-.settings-actions-card {
-  align-content: start;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(247, 251, 244, 0.86));
+.auto-save-indicator {
+  margin: 0;
+  padding: 0.55rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--muted);
+}
+
+.auto-save-indicator-saving {
+  color: var(--accent);
+  background: rgba(31, 122, 77, 0.06);
+  border-color: rgba(31, 122, 77, 0.15);
+}
+
+.auto-save-indicator-saved {
+  color: var(--accent);
+  background: rgba(233, 247, 237, 0.84);
+  border-color: rgba(31, 122, 77, 0.2);
+}
+
+.auto-save-indicator-error {
+  color: #a14b3b;
+  background: rgba(255, 244, 241, 0.92);
+  border-color: rgba(161, 75, 59, 0.2);
 }
 
 .hotkey-capture-button {
@@ -81,21 +107,47 @@
   box-shadow: 0 10px 24px rgba(31, 122, 77, 0.08);
 }
 
-.meeting-readiness {
-  display: grid;
+.meeting-readiness-compact {
+  display: flex;
+  align-items: center;
   gap: 0.55rem;
-  padding: 0.95rem 1rem;
-  border-radius: 16px;
+  padding: 0.65rem 0.85rem;
+  border-radius: 14px;
   border: 1px solid var(--line);
   background: rgba(247, 251, 244, 0.72);
 }
 
-.meeting-readiness-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.65rem;
+.meeting-readiness-compact-title {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+
+.meeting-readiness-compact-good {
+  border-color: rgba(31, 122, 77, 0.22);
+  background: rgba(233, 247, 237, 0.84);
+}
+
+.meeting-readiness-compact-caution {
+  border-color: rgba(180, 140, 50, 0.24);
+  background: rgba(255, 249, 235, 0.92);
+}
+
+.meeting-readiness-compact-warning {
+  border-color: rgba(161, 75, 59, 0.22);
+  background: rgba(255, 244, 241, 0.92);
+}
+
+.status-dot-good {
+  background: var(--accent);
+}
+
+.status-dot-caution {
+  background: #b48c32;
+}
+
+.status-dot-warning {
+  background: #a14b3b;
 }
 
 .meeting-readiness-title {
@@ -104,19 +156,28 @@
   color: var(--ink);
 }
 
-.meeting-readiness-good {
-  border-color: rgba(31, 122, 77, 0.22);
-  background: rgba(233, 247, 237, 0.84);
+.meeting-details {
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(247, 251, 244, 0.72);
+  padding: 0.75rem 1rem;
 }
 
-.meeting-readiness-caution {
-  border-color: rgba(180, 140, 50, 0.24);
-  background: rgba(255, 249, 235, 0.92);
+.meeting-details > summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--muted);
+  list-style: disclosure-closed;
 }
 
-.meeting-readiness-warning {
-  border-color: rgba(161, 75, 59, 0.22);
-  background: rgba(255, 244, 241, 0.92);
+.meeting-details[open] > summary {
+  margin-bottom: 0.75rem;
+  list-style: disclosure-open;
+}
+
+.meeting-details[open] > .meeting-setup-stack {
+  padding-top: 0.25rem;
 }
 
 .meeting-setup-stack {
@@ -205,6 +266,25 @@
   color: var(--muted);
   border-color: rgba(93, 114, 105, 0.18);
   background: rgba(243, 247, 245, 0.94);
+}
+
+.audio-level-meter {
+  margin-top: 0.25rem;
+}
+
+.audio-level-meter-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+
+.audio-level-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2b915c, #4db87a);
+  transition: width 80ms ease-out;
+  min-width: 0;
 }
 
 .model-download-section {

@@ -5,6 +5,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::{
+    audio_monitor::AudioMonitorState,
     engine::{get_or_load_engine, LocalEngineState},
     hotkeys, input_devices, live_recording,
     models::{
@@ -112,7 +113,13 @@ pub fn start_live_transcription(
     app: tauri::AppHandle,
     settings_store: State<'_, SettingsStore>,
     live_recording_state: State<'_, live_recording::LiveRecordingManagerState>,
+    monitor_state: State<'_, AudioMonitorState>,
 ) -> Result<LiveRecordingStatus, String> {
+    // Release the audio monitor before opening the recording stream.
+    // Prevents device-busy errors on platforms without concurrent stream
+    // support (e.g. Linux/ALSA).
+    monitor_state.stop();
+
     let settings = settings_store.load().map_err(|error| error.to_string())?;
     let selected_id = settings.selected_input_device_id.clone();
 
@@ -422,4 +429,23 @@ fn load_api_credentials(
             base_url: settings.api_base_url.clone(),
         },
     ))
+}
+
+#[tauri::command]
+pub fn start_audio_monitor(
+    app: tauri::AppHandle,
+    device_id: Option<String>,
+    monitor_state: State<'_, AudioMonitorState>,
+) -> Result<(), String> {
+    monitor_state
+        .start(&app, device_id.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn stop_audio_monitor(
+    monitor_state: State<'_, AudioMonitorState>,
+) -> Result<(), String> {
+    monitor_state.stop();
+    Ok(())
 }

@@ -1,8 +1,13 @@
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::JsValue;
 
-use crate::tauri_api::{AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile, ProviderMode};
+use crate::tauri_api::{
+    listen_to_app_event, start_audio_monitor, stop_audio_monitor, AudioInputDeviceDescriptor,
+    AudioLevelEvent, HotkeyMode, LiveCaptureProfile, ProviderMode, AUDIO_LEVEL_EVENT_NAME,
+};
 
 use super::input_device_hints::{
     classify_input_device, describe_input_device, format_input_device_option_label,
@@ -13,7 +18,7 @@ use super::meeting_capture::{
     build_meeting_troubleshooting_steps, detect_runtime_platform, dual_capture_available,
     platform_meeting_guidance,
 };
-use super::state::{DownloadState, SettingsFeatureState};
+use super::state::{AutoSaveStatus, DownloadState, SettingsFeatureState};
 
 #[component]
 pub(super) fn ProviderSettingsCard(
@@ -97,6 +102,7 @@ pub(super) fn InputDeviceField(
     selected_input_device_id: RwSignal<Option<String>>,
     input_devices: RwSignal<Vec<AudioInputDeviceDescriptor>>,
     live_capture_profile: RwSignal<LiveCaptureProfile>,
+    settings_visible: Signal<bool>,
 ) -> impl IntoView {
     let selected_input_device_missing = Signal::derive(move || {
         let Some(selected_id) = selected_input_device_id.get() else {
@@ -136,23 +142,6 @@ pub(super) fn InputDeviceField(
                         .to_string()
                 }),
         }
-    });
-
-    let meeting_mix_mic_warning = Signal::derive(move || {
-        if !matches!(live_capture_profile.get(), LiveCaptureProfile::MeetingMix) {
-            return false;
-        }
-        let devices = input_devices.get();
-        let selected_id = selected_input_device_id.get();
-        let effective_device = match selected_id.as_deref() {
-            Some(selected_id) => devices.iter().find(|d| d.id == selected_id),
-            None => devices.iter().find(|d| d.is_default),
-        };
-        let dual_capture_ready = dual_capture_available(&devices);
-        effective_device
-            .map(|device| classify_input_device(device) == InputDeviceKindHint::PhysicalMic)
-            .unwrap_or(false)
-            && !dual_capture_ready
     });
 
     let dual_capture_ready_indicator = Signal::derive(move || {
@@ -196,18 +185,12 @@ pub(super) fn InputDeviceField(
     view! {
         <section class="section settings-card input-device-panel">
             <div class="input-device-panel-header">
-                <div class="stack">
-                    <p class="tag">"Audio input"</p>
-                    <h3>"Audio input"</h3>
-                    <p class="body-copy">
-                        "Select which microphone or audio source to use for live recording."
-                    </p>
-                </div>
+                <h3>"Audio input"</h3>
                 <span class="mini-chip">{move || device_count_label.get()}</span>
             </div>
 
             <label class="field">
-                <span class="field-label">"Audio input"</span>
+                <span class="field-label">"Device"</span>
                 <select
                     class="input-device-select"
                     prop:value=move || selected_input_device_id.get().unwrap_or_default()
@@ -237,6 +220,11 @@ pub(super) fn InputDeviceField(
                 </select>
             </label>
 
+            <AudioLevelMeter
+                settings_visible=settings_visible
+                selected_input_device_id=selected_input_device_id
+            />
+
             <p class="field-hint">{move || selected_device_hint.get()}</p>
 
             <Show when=move || dual_capture_ready_indicator.get()>
@@ -248,38 +236,32 @@ pub(super) fn InputDeviceField(
             </Show>
 
             <div class=move || format!(
-                "meeting-readiness meeting-readiness-{}",
+                "meeting-readiness-compact meeting-readiness-compact-{}",
                 meeting_readiness_hint.get().tone.class_name()
             )>
-                <div class="meeting-readiness-header">
-                    <p class="field-label">"Will this work for meetings?"</p>
-                    <Show when=move || meeting_readiness_hint.get().device_kind.is_some()>
-                        <span class=move || {
+                <span class=move || format!(
+                    "status-dot status-dot-{}",
+                    meeting_readiness_hint.get().tone.class_name()
+                )></span>
+                <span class="meeting-readiness-compact-title">{move || meeting_readiness_hint.get().title}</span>
+                <Show when=move || meeting_readiness_hint.get().device_kind.is_some()>
+                    <span class=move || {
+                        let hint = meeting_readiness_hint.get();
+                        let kind = hint.device_kind.unwrap_or(InputDeviceKindHint::Unknown);
+                        format!(
+                            "mini-chip device-kind-chip device-kind-chip-{}",
+                            kind.class_name()
+                        )
+                    }>
+                        {move || {
                             let hint = meeting_readiness_hint.get();
-                            let kind = hint.device_kind.unwrap_or(InputDeviceKindHint::Unknown);
-                            format!(
-                                "mini-chip device-kind-chip device-kind-chip-{}",
-                                kind.class_name()
-                            )
-                        }>
-                            {move || {
-                                let hint = meeting_readiness_hint.get();
-                                hint.device_kind
-                                    .map(|kind| kind.badge_label().to_string())
-                                    .unwrap_or_default()
-                            }}
-                        </span>
-                    </Show>
-                </div>
-                <p class="meeting-readiness-title">{move || meeting_readiness_hint.get().title}</p>
-                <p class="field-hint">{move || meeting_readiness_hint.get().body}</p>
+                            hint.device_kind
+                                .map(|kind| kind.badge_label().to_string())
+                                .unwrap_or_default()
+                        }}
+                    </span>
+                </Show>
             </div>
-
-            <Show when=move || meeting_mix_mic_warning.get()>
-                <p class="field-hint field-warning">
-                    "Meeting capture may be incomplete: the selected input looks like a standard microphone rather than a mixed input. The transcript may mostly contain your own voice."
-                </p>
-            </Show>
 
             <Show when=move || selected_input_device_missing.get()>
                 <p class="field-hint field-warning">
@@ -297,6 +279,7 @@ pub(super) fn InputDeviceField(
                 selected_input_device_id=selected_input_device_id
                 input_devices=input_devices
                 live_capture_profile=live_capture_profile
+                readiness_body=Signal::derive(move || meeting_readiness_hint.get().body)
             />
         </section>
     }
@@ -307,6 +290,7 @@ fn MeetingCaptureSetupHelp(
     selected_input_device_id: RwSignal<Option<String>>,
     input_devices: RwSignal<Vec<AudioInputDeviceDescriptor>>,
     live_capture_profile: RwSignal<LiveCaptureProfile>,
+    readiness_body: Signal<String>,
 ) -> impl IntoView {
     let platform = detect_runtime_platform();
     let behavior_summary = Signal::derive(move || {
@@ -333,53 +317,59 @@ fn MeetingCaptureSetupHelp(
     let platform_guidance = platform_meeting_guidance(platform);
 
     view! {
-        <div class="meeting-setup-stack">
-            <div class=move || format!(
-                "capture-behavior capture-behavior-{}",
-                behavior_summary.get().tone.class_name()
-            )>
-                <p class="field-label">"Before you record"</p>
-                <p class="meeting-readiness-title">{move || behavior_summary.get().title}</p>
-                <p class="field-hint">{move || behavior_summary.get().body}</p>
-            </div>
+        <Show when=move || matches!(live_capture_profile.get(), LiveCaptureProfile::MeetingMix)>
+            <details class="meeting-details">
+                <summary>"Meeting capture setup guide"</summary>
 
-            <Show when=move || matches!(live_capture_profile.get(), LiveCaptureProfile::MeetingMix)>
-                <div class="meeting-guide-card meeting-guide-card-accent">
-                    <div class="meeting-guide-header">
-                        <p class="field-label">"First time using Meeting mix?"</p>
-                        <span class="mini-chip">"Meeting mix"</span>
+                <div class="meeting-setup-stack">
+                    <p class="field-hint">{move || readiness_body.get()}</p>
+
+                    <div class=move || format!(
+                        "capture-behavior capture-behavior-{}",
+                        behavior_summary.get().tone.class_name()
+                    )>
+                        <p class="field-label">"Before you record"</p>
+                        <p class="meeting-readiness-title">{move || behavior_summary.get().title}</p>
+                        <p class="field-hint">{move || behavior_summary.get().body}</p>
                     </div>
-                    <p class="meeting-readiness-title">
-                        "Choose a microphone or system audio source before you start recording."
-                    </p>
-                    <p class="field-hint">
-                        "On supported platforms, selecting Meeting mix with a microphone input enables automatic dual capture (mic + system audio). You can also choose a System Audio source if you only want remote participants."
-                    </p>
-                </div>
 
-                <div class="meeting-guide-card">
-                    <div class="meeting-guide-header">
-                        <p class="field-label">"Platform guidance"</p>
-                        <span class="mini-chip">
-                            {format!("Current platform: {}", platform_guidance.platform_label)}
-                        </span>
+                    <div class="meeting-guide-card meeting-guide-card-accent">
+                        <div class="meeting-guide-header">
+                            <p class="field-label">"First time using Meeting mix?"</p>
+                            <span class="mini-chip">"Meeting mix"</span>
+                        </div>
+                        <p class="meeting-readiness-title">
+                            "Choose a microphone or system audio source before you start recording."
+                        </p>
+                        <p class="field-hint">
+                            "On supported platforms, selecting Meeting mix with a microphone input enables automatic dual capture (mic + system audio). You can also choose a System Audio source if you only want remote participants."
+                        </p>
                     </div>
-                    <p class="meeting-readiness-title">{platform_guidance.title}</p>
-                    <p class="field-hint">{platform_guidance.body}</p>
-                </div>
 
-                <div class="meeting-guide-card">
-                    <p class="field-label">"Troubleshooting"</p>
-                    <ul class="meeting-help-list">
-                        <For
-                            each=move || troubleshooting_steps.get()
-                            key=|step| step.clone()
-                            children=move |step| view! { <li>{step}</li> }
-                        />
-                    </ul>
+                    <div class="meeting-guide-card">
+                        <div class="meeting-guide-header">
+                            <p class="field-label">"Platform guidance"</p>
+                            <span class="mini-chip">
+                                {format!("Current platform: {}", platform_guidance.platform_label)}
+                            </span>
+                        </div>
+                        <p class="meeting-readiness-title">{platform_guidance.title}</p>
+                        <p class="field-hint">{platform_guidance.body}</p>
+                    </div>
+
+                    <div class="meeting-guide-card">
+                        <p class="field-label">"Troubleshooting"</p>
+                        <ul class="meeting-help-list">
+                            <For
+                                each=move || troubleshooting_steps.get()
+                                key=|step| step.clone()
+                                children=move |step| view! { <li>{step}</li> }
+                            />
+                        </ul>
+                    </div>
                 </div>
-            </Show>
-        </div>
+            </details>
+        </Show>
     }
 }
 
@@ -571,27 +561,104 @@ fn format_shortcut_preview(event: &web_sys::KeyboardEvent, key_code: Option<Stri
 }
 
 #[component]
-pub(super) fn SettingsActionsCard(
-    is_saving: RwSignal<bool>,
-    save_feedback: RwSignal<Option<String>>,
-    on_save: impl Fn(leptos::ev::MouseEvent) + Copy + 'static,
-) -> impl IntoView {
+pub(super) fn AutoSaveIndicator(state: SettingsFeatureState) -> impl IntoView {
+    let label = Signal::derive(move || match state.auto_save_status.get() {
+        AutoSaveStatus::Idle => None,
+        AutoSaveStatus::Pending => Some("Unsaved changes...".to_string()),
+        AutoSaveStatus::Saving => Some("Saving...".to_string()),
+        AutoSaveStatus::Saved => Some("Saved".to_string()),
+        AutoSaveStatus::Error => Some(
+            state
+                .auto_save_error
+                .get()
+                .unwrap_or_else(|| "Save failed".to_string()),
+        ),
+    });
+
+    let class = Signal::derive(move || {
+        let variant = match state.auto_save_status.get() {
+            AutoSaveStatus::Saved => "saved",
+            AutoSaveStatus::Error => "error",
+            AutoSaveStatus::Saving => "saving",
+            _ => "pending",
+        };
+        format!("auto-save-indicator auto-save-indicator-{variant}")
+    });
+
     view! {
-        <section class="section settings-card settings-actions-card">
-            <p class="tag">"Apply"</p>
-            <h3>"Save configuration"</h3>
-            <p class="body-copy">
-                "All changes take effect after saving."
+        <Show when=move || label.get().is_some()>
+            <p class=move || class.get()>
+                {move || label.get().unwrap_or_default()}
             </p>
+        </Show>
+    }
+}
 
-            <button class="primary-button" on:click=on_save disabled=move || is_saving.get()>
-                {move || if is_saving.get() { "Saving..." } else { "Save settings" }}
-            </button>
+#[component]
+fn AudioLevelMeter(
+    settings_visible: Signal<bool>,
+    selected_input_device_id: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let audio_level = RwSignal::new(0.0_f32);
+    let listener_active = RwSignal::new(true);
 
-            <Show when=move || save_feedback.get().is_some()>
-                <p class="feedback">{move || save_feedback.get().unwrap_or_default()}</p>
-            </Show>
-        </section>
+    // Start/stop monitor based on visibility and device selection
+    Effect::new(move |_| {
+        let visible = settings_visible.get();
+        let device_id = selected_input_device_id.get();
+
+        if !visible {
+            spawn_local(async move {
+                let _ = stop_audio_monitor().await;
+            });
+            audio_level.set(0.0);
+            return;
+        }
+
+        spawn_local(async move {
+            let _ = start_audio_monitor(device_id).await;
+        });
+    });
+
+    // Listen to level events once; guard callback with listener_active flag
+    let active_flag = listener_active;
+    spawn_local(async move {
+        let level_signal = audio_level;
+        let _ = listen_to_app_event(AUDIO_LEVEL_EVENT_NAME, move |value: JsValue| {
+            if !active_flag.get_untracked() {
+                return;
+            }
+            if let Ok(event) = serde_wasm_bindgen::from_value::<AudioLevelEvent>(value) {
+                level_signal.set(event.rms);
+            }
+        })
+        .await;
+    });
+
+    // Clean up on component unmount: deactivate listener + stop monitor
+    on_cleanup(move || {
+        listener_active.set(false);
+        spawn_local(async move {
+            let _ = stop_audio_monitor().await;
+        });
+    });
+
+    let bar_width = Signal::derive(move || {
+        let rms = audio_level.get().max(0.0).min(1.0);
+        let db = if rms < 1e-6 { -60.0 } else { 20.0 * rms.log10() };
+        let pct = ((db + 60.0) / 60.0 * 100.0).clamp(0.0, 100.0);
+        format!("{pct:.0}%")
+    });
+
+    view! {
+        <div class="audio-level-meter">
+            <div class="audio-level-meter-track">
+                <div
+                    class="audio-level-meter-fill"
+                    style:width=move || bar_width.get()
+                ></div>
+            </div>
+        </div>
     }
 }
 
@@ -848,6 +915,12 @@ pub(super) fn ApiConnectionCard(state: SettingsFeatureState) -> impl IntoView {
                         on:input=move |event| {
                             state.form.api_key_input.set(event_target_value(&event));
                             state.form.clear_api_key.set(false);
+                        }
+                        on:blur=move |_| {
+                            let key = state.form.api_key_input.get_untracked();
+                            if !key.trim().is_empty() || state.form.clear_api_key.get_untracked() {
+                                state.api_key_save_requested.update(|n| *n = n.saturating_add(1));
+                            }
                         }
                         placeholder=move || {
                             if state.form.api_key_present.get() {

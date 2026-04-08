@@ -119,7 +119,7 @@ pub fn App() -> impl IntoView {
             <AppHeader show_settings=show_settings />
             <div class="frame">
                 <TranscribeScreen
-                    active=Signal::derive(|| true)
+                    active=Signal::derive(move || !show_settings.get())
                     show_postprocess=show_postprocess
                     transcription=transcription
                     live_recording=live_recording
@@ -146,7 +146,7 @@ pub fn App() -> impl IntoView {
                             "Close"
                         </button>
                     </div>
-                    <SettingsScreen live_recording=live_recording />
+                    <SettingsScreen live_recording=live_recording show_settings=show_settings />
                 </div>
             </div>
         </main>
