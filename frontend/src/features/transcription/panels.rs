@@ -87,6 +87,8 @@ pub fn TranscriptResultPanel(
     let panel_ref = NodeRef::<Section>::new();
     let copy_feedback_error = RwSignal::new(false);
     let copy_feedback_target = RwSignal::new(None::<&'static str>);
+    let export_feedback_error = RwSignal::new(false);
+    let export_feedback_target = RwSignal::new(None::<&'static str>);
     let last_focused_completion_nonce = RwSignal::new(None::<u64>);
     let highlighted_completion_nonce = RwSignal::new(None::<u64>);
     let is_listening =
@@ -168,12 +170,58 @@ pub fn TranscriptResultPanel(
             "Copy with timestamps"
         }
     });
+    let export_plain_button_class = Signal::derive(move || {
+        if export_feedback_target.get() == Some("plain") {
+            if export_feedback_error.get() {
+                "secondary-button error"
+            } else {
+                "secondary-button success"
+            }
+        } else {
+            "secondary-button"
+        }
+    });
+    let export_timestamp_button_class = Signal::derive(move || {
+        if export_feedback_target.get() == Some("timestamps") {
+            if export_feedback_error.get() {
+                "secondary-button error"
+            } else {
+                "secondary-button success"
+            }
+        } else {
+            "secondary-button"
+        }
+    });
+    let export_plain_button_label = Signal::derive(move || {
+        if export_feedback_target.get() == Some("plain") {
+            if export_feedback_error.get() {
+                "Export failed"
+            } else {
+                "Exported"
+            }
+        } else {
+            "Export"
+        }
+    });
+    let export_timestamp_button_label = Signal::derive(move || {
+        if export_feedback_target.get() == Some("timestamps") {
+            if export_feedback_error.get() {
+                "Export failed"
+            } else {
+                "Exported with timestamps"
+            }
+        } else {
+            "Export with timestamps"
+        }
+    });
 
     Effect::new(move |_| {
         plain_copy_text.get();
         timestamp_copy_text.get();
         copy_feedback_error.set(false);
         copy_feedback_target.set(None);
+        export_feedback_error.set(false);
+        export_feedback_target.set(None);
     });
 
     Effect::new(move |_| {
@@ -244,6 +292,26 @@ pub fn TranscriptResultPanel(
         });
     };
 
+    let export_plain = move |_| {
+        let text = plain_copy_text.get_untracked();
+        if text.trim().is_empty() {
+            export_feedback_error.set(true);
+            export_feedback_target.set(Some("plain"));
+            return;
+        }
+        export_to_file(text, "transcript.txt", export_feedback_error, export_feedback_target, "plain");
+    };
+
+    let export_with_timestamps = move |_| {
+        let text = timestamp_copy_text.get_untracked();
+        if text.trim().is_empty() {
+            export_feedback_error.set(true);
+            export_feedback_target.set(Some("timestamps"));
+            return;
+        }
+        export_to_file(text, "transcript.txt", export_feedback_error, export_feedback_target, "timestamps");
+    };
+
     view! {
         <section
             node_ref=panel_ref
@@ -291,6 +359,22 @@ pub fn TranscriptResultPanel(
                             disabled=move || !can_copy.get()
                         >
                             {move || timestamp_button_label.get()}
+                        </button>
+                    </Show>
+                    <button
+                        class=move || export_plain_button_class.get()
+                        on:click=export_plain
+                        disabled=move || !can_copy.get()
+                    >
+                        {move || export_plain_button_label.get()}
+                    </button>
+                    <Show when=move || has_segments.get()>
+                        <button
+                            class=move || export_timestamp_button_class.get()
+                            on:click=export_with_timestamps
+                            disabled=move || !can_copy.get()
+                        >
+                            {move || export_timestamp_button_label.get()}
                         </button>
                     </Show>
                     <Show when=move || show_postprocess_button.get()>
@@ -381,6 +465,34 @@ fn listening_status_message(input_label: &str, elapsed_ms: u64) -> String {
         "Recording from {input_label}. Stop recording to generate the transcript. Elapsed: {}.",
         format_duration(elapsed_ms)
     )
+}
+
+fn export_to_file(
+    text: String,
+    default_name: &'static str,
+    feedback_error: RwSignal<bool>,
+    feedback_target: RwSignal<Option<&'static str>>,
+    target_key: &'static str,
+) {
+    spawn_local(async move {
+        match crate::tauri_api::pick_save_file(default_name).await {
+            Ok(Some(path)) => match crate::tauri_api::write_text_file(&path, &text).await {
+                Ok(()) => {
+                    feedback_error.set(false);
+                    feedback_target.set(Some(target_key));
+                }
+                Err(_) => {
+                    feedback_error.set(true);
+                    feedback_target.set(Some(target_key));
+                }
+            },
+            Ok(None) => {}
+            Err(_) => {
+                feedback_error.set(true);
+                feedback_target.set(Some(target_key));
+            }
+        }
+    });
 }
 
 fn can_copy_transcript(is_listening: bool, text: &str) -> bool {

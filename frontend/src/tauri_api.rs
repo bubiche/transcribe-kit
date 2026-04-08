@@ -55,6 +55,24 @@ export async function transcribeLiveRecording(request, onUpdate) {
   });
 }
 
+export async function pickSaveFile(defaultName) {
+  const result = await window.__TAURI__.dialog.save({
+    defaultPath: defaultName,
+    filters: [
+      {
+        name: 'Text',
+        extensions: ['txt']
+      }
+    ]
+  });
+
+  return result ?? null;
+}
+
+export async function writeTextFile(path, content) {
+  return await window.__TAURI__.core.invoke('write_text_file', { path, content });
+}
+
 export async function writeClipboardText(text) {
   if (navigator?.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
@@ -105,6 +123,12 @@ extern "C" {
         request: JsValue,
         on_update: &Closure<dyn Fn(JsValue)>,
     ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = pickSaveFile)]
+    async fn pick_save_file_js(default_name: &str) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = writeTextFile)]
+    async fn write_text_file_js(path: &str, content: &str) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(catch, js_name = writeClipboardText)]
     async fn write_clipboard_text_js(text: &str) -> Result<JsValue, JsValue>;
@@ -547,6 +571,28 @@ pub async fn transcribe_live_recording(
     closure.forget();
     result
         .and_then(|value| serde_wasm_bindgen::from_value(value).map_err(|error| error.to_string()))
+}
+
+pub async fn pick_save_file(default_name: &str) -> Result<Option<String>, String> {
+    let value = pick_save_file_js(default_name)
+        .await
+        .map_err(js_error_message)?;
+
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+
+    value
+        .as_string()
+        .map(Some)
+        .ok_or_else(|| "Save dialog returned an unexpected value".to_string())
+}
+
+pub async fn write_text_file(path: &str, content: &str) -> Result<(), String> {
+    write_text_file_js(path, content)
+        .await
+        .map_err(js_error_message)
+        .map(|_| ())
 }
 
 pub async fn write_clipboard_text(text: &str) -> Result<(), String> {

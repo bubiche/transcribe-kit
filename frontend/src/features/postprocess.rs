@@ -470,12 +470,25 @@ fn PostprocessResultPanel(
 ) -> impl IntoView {
     let has_result = Signal::derive(move || result_text.get().is_some());
     let has_error = Signal::derive(move || error_message.get().is_some());
+    let export_feedback = RwSignal::new(None::<&'static str>);
 
     let copy_button_label = Signal::derive(move || copy_feedback.get().unwrap_or("Copy result"));
     let copy_button_class = Signal::derive(move || match copy_feedback.get() {
         Some("Copied") => "secondary-button success",
         Some("Copy failed") => "secondary-button error",
         _ => "secondary-button",
+    });
+
+    let export_button_label = Signal::derive(move || export_feedback.get().unwrap_or("Export result"));
+    let export_button_class = Signal::derive(move || match export_feedback.get() {
+        Some("Exported") => "secondary-button success",
+        Some("Export failed") => "secondary-button error",
+        _ => "secondary-button",
+    });
+
+    Effect::new(move |_| {
+        result_text.get();
+        export_feedback.set(None);
     });
 
     let on_copy = move |_: leptos::ev::MouseEvent| {
@@ -488,6 +501,26 @@ fn PostprocessResultPanel(
             match write_clipboard_text(&text).await {
                 Ok(()) => copy_feedback.set(Some("Copied")),
                 Err(_) => copy_feedback.set(Some("Copy failed")),
+            }
+        });
+    };
+
+    let on_export = move |_: leptos::ev::MouseEvent| {
+        let Some(text) = result_text.get_untracked() else {
+            return;
+        };
+        export_feedback.set(None);
+
+        spawn_local(async move {
+            match crate::tauri_api::pick_save_file("postprocess-result.txt").await {
+                Ok(Some(path)) => {
+                    match crate::tauri_api::write_text_file(&path, &text).await {
+                        Ok(()) => export_feedback.set(Some("Exported")),
+                        Err(_) => export_feedback.set(Some("Export failed")),
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => export_feedback.set(Some("Export failed")),
             }
         });
     };
@@ -519,6 +552,12 @@ fn PostprocessResultPanel(
                                 on:click=on_copy
                             >
                                 {move || copy_button_label.get()}
+                            </button>
+                            <button
+                                class=move || export_button_class.get()
+                                on:click=on_export
+                            >
+                                {move || export_button_label.get()}
                             </button>
                         </div>
                     </div>

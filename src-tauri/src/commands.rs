@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::ipc::Channel;
@@ -410,6 +410,15 @@ pub async fn run_postprocess(
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn write_text_file(path: String, content: String) -> Result<(), String> {
+    let file_path = Path::new(&path);
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {e}"))?;
+    }
+    std::fs::write(file_path, content).map_err(|e| format!("Failed to write file: {e}"))
 }
 
 fn load_api_credentials(
