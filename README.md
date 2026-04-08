@@ -1,101 +1,45 @@
 # Transcribe Kit
 
-Cross-platform desktop transcription app scaffold built with Tauri + Leptos.
+Cross-platform desktop transcription app built with Tauri + Leptos. Transcribe audio files or record live — using local Whisper models or any OpenAI-compatible API — then post-process results with AI prompt templates. One Rust codebase, all desktop platforms.
 
-## Goal
+| Recording | Settings | Post-processing |
+|:-:|:-:|:-:|
+| ![Recording](docs/screenshots/recording_screenshot.png) | ![Settings](docs/screenshots/settings_screenshot.png) | ![Post-processing](docs/screenshots/post_process_screenshot.png) |
 
-Build an app similar to TypeWhisper but from a single shared codebase targeting:
+## Features
 
-- macOS
-- Windows
-- Linux
-
-## Required Product Features
-
-### 1) Multiple transcription backends
-
-The app must support both:
-
-- Local on-device transcription
-- API-based transcription
-
-Local model options:
-
-- Whisper family
-- NVIDIA Parakeet TDT 0.6B v3
-
-API options:
-
-- OpenAI transcription API
-- OpenAI-compatible APIs via custom base URL
-
-User requirements:
-
-- User can choose local vs API mode
-- User can choose model per mode
-- User can set and update API key
-- User can set and update API base URL
-
-### 2) Audio input modes
-
-The app must support both:
-
-- Audio file input transcription
-- Live microphone transcription
-
-Live microphone requirements:
-
-- Push-to-talk hotkey mode
-- Toggle recording hotkey mode
-- Input device selection
-
-### 3) Post-processing pipeline
-
-After base transcription is generated:
-
-- Transcript can be sent to AI post-processing
-- User can define custom prompts
-- Prompt templates should be supported
-
-### 4) One UI codebase for all desktop platforms
-
-- Same UI implementation across macOS, Windows, and Linux
-- Platform-specific behavior should live in the Tauri layer where needed
+- **Local & API transcription** — run Whisper locally (tiny, base, small, large-v3-turbo) or hit any OpenAI-compatible endpoint. Automatic model download and caching for local mode.
+- **File import** — drag in WAV, MP3, FLAC, OGG, or M4A files. Large files are auto-compressed to MP3 before API upload.
+- **Live recording** — push-to-talk or toggle mode with a configurable global hotkey. Works even when the app is in the background.
+- **Meeting capture** — dual-stream mode records microphone and system audio simultaneously, then mixes them into one file for transcription.
+- **Real-time streaming** — transcription segments appear as they're produced, with progress updates.
+- **Post-processing pipeline** — send transcripts through AI prompts. Ships with built-in templates (cleanup, meeting notes, summary) and supports custom user templates.
+- **Secure API key storage** — credentials are stored in the system keyring, not in config files.
+- **Persistent settings** — provider, model, device, hotkey, and API config auto-save with debouncing.
+- **Cross-platform** — macOS, Windows, and Linux from one codebase.
 
 ## Tech Stack
 
-- `frontend/`: Leptos client-side UI written in Rust
-- `Trunk`: Rust/WASM bundler and dev server
-- `src-tauri/`: Rust + Tauri desktop runtime
-- `src-tauri/src/providers/`: provider adapter stubs for Whisper, Parakeet, and OpenAI-compatible APIs
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Leptos (Rust → WASM), bundled with Trunk |
+| Desktop runtime | Tauri 2 |
+| Local inference | whisper-rs (whisper.cpp bindings) |
+| Audio I/O | CPAL for capture, Symphonia for decoding |
+| API transport | reqwest with multipart streaming |
+| Settings | JSON config + system keyring for secrets |
 
-## Scaffold Included In This Repository
+## Project Structure
 
-- Root Cargo workspace for both frontend and desktop runtime crates
-- Leptos frontend shell with feature-oriented modules
-- Tauri runtime with stub commands and provider adapters
-- Collaboration docs that spell out product scope for future agents
-
-## Collaboration Contract For Other Agents
-
-Use this as project guardrails when implementing features.
-
-1. Keep desktop-specific behavior in `src-tauri` unless it is purely presentation or local UI state.
-2. Maintain provider abstraction so adding or removing engines does not force UI contract changes.
-3. Do not hardcode API keys or secrets.
-4. Preserve the ability to configure an OpenAI-compatible base URL.
-5. Keep audio capture and transcription execution decoupled.
-6. Every feature PR should update docs when contracts or architecture change.
-
-## Suggested Build Order
-
-1. Build settings state and persistence for provider, model, API key, base URL, hotkeys, and input device.
-2. Implement audio capture and file import flows.
-3. Implement the local Whisper path end-to-end.
-4. Implement the OpenAI-compatible API path end-to-end.
-5. Add the Parakeet local inference adapter.
-6. Add the post-processing prompt pipeline.
-7. Add packaging and release flow for macOS, Windows, and Linux.
+```
+frontend/src/         Leptos UI components and state
+src-tauri/src/
+  commands.rs         Tauri IPC command handlers
+  transcription.rs    Transcription orchestration
+  live_recording/     Audio capture and mixing
+  providers/          Backend adapters (Whisper, OpenAI, Parakeet)
+  settings.rs         Persistent config management
+```
 
 ## Local Development
 
