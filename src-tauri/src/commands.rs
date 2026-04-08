@@ -452,9 +452,7 @@ pub fn start_audio_monitor(
 }
 
 #[tauri::command]
-pub fn stop_audio_monitor(
-    monitor_state: State<'_, AudioMonitorState>,
-) -> Result<(), String> {
+pub fn stop_audio_monitor(monitor_state: State<'_, AudioMonitorState>) -> Result<(), String> {
     monitor_state.stop();
     Ok(())
 }

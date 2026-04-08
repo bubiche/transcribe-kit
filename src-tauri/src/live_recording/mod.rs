@@ -310,7 +310,10 @@ impl SingleStreamRecording {
             Err(_) => return Err(LiveRecordingError::WriterThreadPanicked),
         }
 
-        let runtime_error = runtime_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let runtime_error = runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         if let Some(runtime_error) = runtime_error {
             let _ = fs::remove_file(&output_file_path);
             return Err(LiveRecordingError::StreamRuntime(runtime_error));
@@ -525,8 +528,14 @@ impl DualStreamRecording {
 
         let mic_writer_result = join_writer_thread(mic_writer_thread);
         let loopback_writer_result = join_writer_thread(loopback_writer_thread);
-        let mic_runtime_error = mic_runtime_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let loopback_runtime_error = loopback_runtime_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mic_runtime_error = mic_runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let loopback_runtime_error = loopback_runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         if let Err(error) = mic_writer_result {
             let _ = fs::remove_file(&mic_temp_path);
@@ -620,13 +629,18 @@ impl DualStreamRecording {
     }
 
     fn status(&self) -> LiveRecordingStatus {
-        let message = self.mic_runtime_error.lock().unwrap_or_else(|e| e.into_inner()).clone().or_else(|| {
-            self.loopback_runtime_error
-                .lock()
-                .unwrap()
-                .clone()
-                .map(|runtime_error| format!("System audio capture: {runtime_error}"))
-        });
+        let message = self
+            .mic_runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .or_else(|| {
+                self.loopback_runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+                    .map(|runtime_error| format!("System audio capture: {runtime_error}"))
+            });
 
         LiveRecordingStatus {
             state: LiveRecordingState::Recording,

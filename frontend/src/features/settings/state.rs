@@ -283,18 +283,16 @@ impl SettingsFeatureState {
 
                     // Reset status to Idle after 2 seconds
                     let saved_gen = self.auto_save_generation.get_untracked();
-                    let timeout_closure =
-                        wasm_bindgen::closure::Closure::once_into_js(move || {
-                            if self.auto_save_generation.get_untracked() == saved_gen {
-                                self.auto_save_status.set(AutoSaveStatus::Idle);
-                            }
-                        });
+                    let timeout_closure = wasm_bindgen::closure::Closure::once_into_js(move || {
+                        if self.auto_save_generation.get_untracked() == saved_gen {
+                            self.auto_save_status.set(AutoSaveStatus::Idle);
+                        }
+                    });
                     if let Some(window) = web_sys::window() {
-                        let _ = window
-                            .set_timeout_with_callback_and_timeout_and_arguments_0(
-                                timeout_closure.as_ref().unchecked_ref(),
-                                2000,
-                            );
+                        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                            timeout_closure.as_ref().unchecked_ref(),
+                            2000,
+                        );
                     }
                 }
                 Err(error) => {

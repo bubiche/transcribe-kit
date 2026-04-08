@@ -645,7 +645,11 @@ fn AudioLevelMeter(
 
     let bar_width = Signal::derive(move || {
         let rms = audio_level.get().max(0.0).min(1.0);
-        let db = if rms < 1e-6 { -60.0 } else { 20.0 * rms.log10() };
+        let db = if rms < 1e-6 {
+            -60.0
+        } else {
+            20.0 * rms.log10()
+        };
         let pct = ((db + 60.0) / 60.0 * 100.0).clamp(0.0, 100.0);
         format!("{pct:.0}%")
     });

@@ -101,10 +101,12 @@ impl SettingsStore {
             .ok_or(SettingsError::MissingConfigDir)?;
 
         let keyring_available = Entry::new(KEYCHAIN_SERVICE, "probe")
-            .and_then(|entry| entry.get_password().or_else(|e| match e {
-                keyring::Error::NoEntry => Ok(String::new()),
-                other => Err(other),
-            }))
+            .and_then(|entry| {
+                entry.get_password().or_else(|e| match e {
+                    keyring::Error::NoEntry => Ok(String::new()),
+                    other => Err(other),
+                })
+            })
             .is_ok();
 
         if !keyring_available {
@@ -279,7 +281,10 @@ impl SettingsStore {
             }
         }
         // File fallback
-        Ok(stored.api_key_plaintext.as_ref().is_some_and(|k| !k.trim().is_empty()))
+        Ok(stored
+            .api_key_plaintext
+            .as_ref()
+            .is_some_and(|k| !k.trim().is_empty()))
     }
 
     pub fn get_api_key(&self, base_url: &str) -> Result<String, SettingsError> {

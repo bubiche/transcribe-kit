@@ -51,10 +51,7 @@ pub fn SettingsScreen(
             return;
         }
 
-        let next_gen = state
-            .auto_save_generation
-            .get_untracked()
-            .saturating_add(1);
+        let next_gen = state.auto_save_generation.get_untracked().saturating_add(1);
         state.auto_save_generation.set(next_gen);
         state.auto_save_status.set(AutoSaveStatus::Pending);
 
@@ -79,9 +76,7 @@ pub fn SettingsScreen(
     // Immediate save on API key blur
     Effect::new(move |_| {
         let gen = state.api_key_save_requested.get();
-        if gen == 0
-            || state.suppress_auto_save.get_untracked()
-            || state.is_loading.get_untracked()
+        if gen == 0 || state.suppress_auto_save.get_untracked() || state.is_loading.get_untracked()
         {
             return;
         }

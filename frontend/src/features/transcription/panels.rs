@@ -299,7 +299,13 @@ pub fn TranscriptResultPanel(
             export_feedback_target.set(Some("plain"));
             return;
         }
-        export_to_file(text, "transcript.txt", export_feedback_error, export_feedback_target, "plain");
+        export_to_file(
+            text,
+            "transcript.txt",
+            export_feedback_error,
+            export_feedback_target,
+            "plain",
+        );
     };
 
     let export_with_timestamps = move |_| {
@@ -309,7 +315,13 @@ pub fn TranscriptResultPanel(
             export_feedback_target.set(Some("timestamps"));
             return;
         }
-        export_to_file(text, "transcript.txt", export_feedback_error, export_feedback_target, "timestamps");
+        export_to_file(
+            text,
+            "transcript.txt",
+            export_feedback_error,
+            export_feedback_target,
+            "timestamps",
+        );
     };
 
     view! {

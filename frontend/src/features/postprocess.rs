@@ -479,7 +479,8 @@ fn PostprocessResultPanel(
         _ => "secondary-button",
     });
 
-    let export_button_label = Signal::derive(move || export_feedback.get().unwrap_or("Export result"));
+    let export_button_label =
+        Signal::derive(move || export_feedback.get().unwrap_or("Export result"));
     let export_button_class = Signal::derive(move || match export_feedback.get() {
         Some("Exported") => "secondary-button success",
         Some("Export failed") => "secondary-button error",
@@ -513,12 +514,10 @@ fn PostprocessResultPanel(
 
         spawn_local(async move {
             match crate::tauri_api::pick_save_file("postprocess-result.txt").await {
-                Ok(Some(path)) => {
-                    match crate::tauri_api::write_text_file(&path, &text).await {
-                        Ok(()) => export_feedback.set(Some("Exported")),
-                        Err(_) => export_feedback.set(Some("Export failed")),
-                    }
-                }
+                Ok(Some(path)) => match crate::tauri_api::write_text_file(&path, &text).await {
+                    Ok(()) => export_feedback.set(Some("Exported")),
+                    Err(_) => export_feedback.set(Some("Export failed")),
+                },
                 Ok(None) => {}
                 Err(_) => export_feedback.set(Some("Export failed")),
             }
