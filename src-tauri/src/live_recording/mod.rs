@@ -29,6 +29,8 @@ use wav_mixing::{
 
 pub const LIVE_RECORDING_STATUS_EVENT_NAME: &str = "transcribe-kit://live-recording-status";
 
+type WavWriterHandle = (Sender<Vec<i16>>, JoinHandle<Result<(), LiveRecordingError>>);
+
 #[derive(Debug, thiserror::Error)]
 pub enum LiveRecordingError {
     #[error("A live recording is already in progress. Stop it before starting a new recording.")]
@@ -790,7 +792,7 @@ fn spawn_wav_writer(
     path: &Path,
     sample_rate_hz: u32,
     channels: u16,
-) -> Result<(Sender<Vec<i16>>, JoinHandle<Result<(), LiveRecordingError>>), LiveRecordingError> {
+) -> Result<WavWriterHandle, LiveRecordingError> {
     let writer = hound::WavWriter::create(path, wav_spec(sample_rate_hz, channels))
         .map_err(|error| LiveRecordingError::CreateWav(error.to_string()))?;
     let (tx, rx) = mpsc::channel::<Vec<i16>>();

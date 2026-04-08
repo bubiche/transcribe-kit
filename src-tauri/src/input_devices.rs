@@ -91,7 +91,7 @@ pub fn platform_supports_output_loopback() -> bool {
 
     #[cfg(target_os = "macos")]
     {
-        return macos_version_at_least(14, 2);
+        macos_version_at_least(14, 2)
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]

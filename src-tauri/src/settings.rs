@@ -122,10 +122,6 @@ impl SettingsStore {
         })
     }
 
-    pub fn keyring_available(&self) -> bool {
-        self.keyring_available
-    }
-
     #[cfg(test)]
     fn with_path(path: PathBuf) -> Self {
         Self {

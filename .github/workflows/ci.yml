@@ -65,7 +65,7 @@ jobs:
         run: cargo clippy -p transcribe-kit --all-targets
 
       - name: Clippy (frontend)
-        run: cargo clippy -p frontend --all-targets --target wasm32-unknown-unknown
+        run: cargo clippy -p transcribe-kit-frontend --all-targets --target wasm32-unknown-unknown
 
       - name: Run tests
         run: cargo test -p transcribe-kit

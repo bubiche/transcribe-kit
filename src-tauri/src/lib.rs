@@ -99,7 +99,7 @@ pub fn run() {
                 preload_engine_state.clone(),
                 preload_settings_store.clone(),
             );
-            preload_hotkey_state.initialize_from_settings(&app.handle(), &preload_settings_store);
+            preload_hotkey_state.initialize_from_settings(app.handle(), &preload_settings_store);
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -154,17 +154,12 @@ pub enum HotkeyMode {
     Toggle,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum LiveCaptureProfile {
+    #[default]
     MicrophoneOnly,
     MeetingMix,
-}
-
-impl Default for LiveCaptureProfile {
-    fn default() -> Self {
-        Self::MicrophoneOnly
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

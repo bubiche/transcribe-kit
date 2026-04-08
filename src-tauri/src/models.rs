@@ -1,42 +1,27 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderMode {
+    #[default]
     Local,
     Api,
 }
 
-impl Default for ProviderMode {
-    fn default() -> Self {
-        Self::Local
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum HotkeyMode {
+    #[default]
     PushToTalk,
     Toggle,
 }
 
-impl Default for HotkeyMode {
-    fn default() -> Self {
-        Self::PushToTalk
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum LiveCaptureProfile {
+    #[default]
     MicrophoneOnly,
     MeetingMix,
-}
-
-impl Default for LiveCaptureProfile {
-    fn default() -> Self {
-        Self::MicrophoneOnly
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
