@@ -1,4 +1,5 @@
 pub mod api_openai_compatible;
+pub mod local_llm;
 pub mod local_whisper;
 
 use crate::models::TranscriptResult;
