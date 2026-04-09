@@ -20,6 +20,9 @@ description = "Build production desktop bundles"
 command = "cargo"
 args = ["tauri", "build"]
 
+[tasks.build.env]
+CMAKE_OSX_DEPLOYMENT_TARGET = "10.15"
+
 [tasks.build-frontend]
 description = "Build the Leptos frontend only"
 command = "trunk"
