@@ -6,7 +6,8 @@ use wasm_bindgen::JsValue;
 
 use crate::tauri_api::{
     listen_to_app_event, start_audio_monitor, stop_audio_monitor, AudioInputDeviceDescriptor,
-    AudioLevelEvent, HotkeyMode, LiveCaptureProfile, ProviderMode, AUDIO_LEVEL_EVENT_NAME,
+    AudioLevelEvent, HotkeyMode, LiveCaptureProfile, PostprocessProviderMode, ProviderMode,
+    AUDIO_LEVEL_EVENT_NAME,
 };
 
 use super::input_device_hints::{
@@ -892,13 +893,144 @@ fn ApiModelFields(state: SettingsFeatureState, custom_api_selected: Signal<bool>
 }
 
 #[component]
+pub(super) fn PostprocessSettingsCard(state: SettingsFeatureState) -> impl IntoView {
+    let llm_model_downloaded = state.selected_llm_model_downloaded();
+    let llm_download = state.llm_download;
+    let on_llm_download = move |_| state.download_selected_llm_model();
+    let on_llm_delete = move |_| state.delete_selected_llm_model();
+
+    let selected_llm_size_label = Signal::derive(move || {
+        let model_id = state.form.local_llm_model_id.get();
+        state
+            .llm_models
+            .get()
+            .iter()
+            .find(|m| m.id == model_id)
+            .map(|m| m.size_label.clone())
+            .unwrap_or_default()
+    });
+
+    view! {
+        <section class="section settings-card">
+            <p class="tag">"Post-processing"</p>
+            <h3>"Post-processing provider"</h3>
+            <p class="body-copy">
+                "Choose whether post-processing uses a remote API or a local LLM running on this machine."
+            </p>
+
+            <div class="stack">
+                <label class="field">
+                    <span class="field-label">"Provider"</span>
+                    <select
+                        prop:value=move || match state.form.postprocess_provider_mode.get() {
+                            PostprocessProviderMode::Api => "api",
+                            PostprocessProviderMode::LocalLlm => "local-llm",
+                        }
+                        on:change=move |event| {
+                            match event_target_value(&event).as_str() {
+                                "local-llm" => state.form.postprocess_provider_mode.set(PostprocessProviderMode::LocalLlm),
+                                _ => state.form.postprocess_provider_mode.set(PostprocessProviderMode::Api),
+                            }
+                        }
+                    >
+                        <option value="api">"API"</option>
+                        <option value="local-llm">"Local LLM"</option>
+                    </select>
+                </label>
+
+                <Show when=move || matches!(state.form.postprocess_provider_mode.get(), PostprocessProviderMode::Api)>
+                    <label class="field">
+                        <span class="field-label">"Post-processing model"</span>
+                        <input
+                            type="text"
+                            prop:value=move || state.form.postprocess_model.get()
+                            on:input=move |event| state.form.postprocess_model.set(event_target_value(&event))
+                            placeholder="gpt-4o-mini"
+                        />
+                    </label>
+                    <p class="field-hint">
+                        "The chat model used for post-processing (e.g. gpt-4o-mini, llama3). Enter the model identifier your provider expects."
+                    </p>
+                </Show>
+
+                <Show when=move || matches!(state.form.postprocess_provider_mode.get(), PostprocessProviderMode::LocalLlm)>
+                    <label class="field">
+                        <span class="field-label">"LLM model"</span>
+                        <select
+                            prop:value=move || state.form.local_llm_model_id.get()
+                            on:change=move |event| state.form.local_llm_model_id.set(event_target_value(&event))
+                        >
+                            <For
+                                each=move || state.llm_models.get()
+                                key=|model| model.id.clone()
+                                children=move |model| {
+                                    let label = format!("{} ({})", model.label, model.size_label);
+                                    view! {
+                                        <option value=model.id.clone()>{label}</option>
+                                    }
+                                }
+                            />
+                        </select>
+                    </label>
+
+                    <div class="model-download-section">
+                        <Show
+                            when=move || llm_download.is_downloading.get()
+                            fallback=move || {
+                                view! {
+                                    <Show
+                                        when=move || llm_model_downloaded.get()
+                                        fallback=move || {
+                                            view! {
+                                                <div class="model-status not-downloaded">
+                                                    <span class="status-dot missing"></span>
+                                                    <span>"Model not downloaded"</span>
+                                                    <span class="size-hint">{move || selected_llm_size_label.get()}</span>
+                                                    <button
+                                                        class="download-button"
+                                                        on:click=on_llm_download
+                                                    >
+                                                        "Download"
+                                                    </button>
+                                                </div>
+                                            }
+                                        }
+                                    >
+                                        <div class="model-status downloaded">
+                                            <span class="status-dot ready"></span>
+                                            <span>"Model ready"</span>
+                                            <button
+                                                class="delete-button"
+                                                on:click=on_llm_delete
+                                            >
+                                                "Delete"
+                                            </button>
+                                        </div>
+                                    </Show>
+                                }
+                            }
+                        >
+                            <DownloadProgressBar download=llm_download />
+                        </Show>
+
+                        <Show when=move || llm_download.download_error.get().is_some()>
+                            <p class="download-error">{move || llm_download.download_error.get().unwrap_or_default()}</p>
+                        </Show>
+                    </div>
+                </Show>
+            </div>
+        </section>
+    }
+}
+
+#[component]
 pub(super) fn ApiConnectionCard(state: SettingsFeatureState) -> impl IntoView {
     view! {
         <section class="section settings-card">
             <p class="tag">"API"</p>
             <h3>"API settings"</h3>
             <p class="body-copy">
-                "Endpoint, credentials, and post-processing model shared by API transcription and post-processing."
+                "Endpoint and credentials for API transcription and post-processing."
             </p>
 
             <div class="stack">
@@ -956,20 +1088,6 @@ pub(super) fn ApiConnectionCard(state: SettingsFeatureState) -> impl IntoView {
                     />
                     <span>"Remove the saved API key for this base URL"</span>
                 </label>
-
-                <label class="field">
-                    <span class="field-label">"Post-processing model"</span>
-                    <input
-                        type="text"
-                        prop:value=move || state.form.postprocess_model.get()
-                        on:input=move |event| state.form.postprocess_model.set(event_target_value(&event))
-                        placeholder="gpt-4o-mini"
-                    />
-                </label>
-
-                <p class="field-hint">
-                    "The chat model used for post-processing (e.g. gpt-4o-mini, llama3). Enter the model identifier your provider expects."
-                </p>
             </div>
         </section>
     }

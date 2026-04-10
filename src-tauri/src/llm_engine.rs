@@ -11,12 +11,30 @@ use tokio_util::sync::CancellationToken;
 
 use crate::providers::local_llm;
 
+/// Manages cancellation of an in-flight post-processing request.
+///
+/// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) because the lock is
+/// never held across an await — we only swap the token in and out.
+#[derive(Clone)]
+pub struct PostprocessCancelState {
+    pub token: Arc<std::sync::Mutex<Option<CancellationToken>>>,
+}
+
+impl PostprocessCancelState {
+    pub fn new() -> Self {
+        Self {
+            token: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+}
+
 /// Tracks a running llama-server sidecar process.
+#[allow(dead_code)] // `pid` is written for orphan cleanup via PID file
 struct RunningServer {
     child: CommandChild,
     port: u16,
     model_id: String,
-    pid: u32, // for orphan cleanup
+    pid: u32,
 }
 
 /// Manages the llama-server sidecar lifecycle.
@@ -53,11 +71,8 @@ pub async fn ensure_server_running(
 
     // Already running with correct model? Verify it's still alive.
     if let Some(ref server) = *guard {
-        if server.model_id == model_id {
-            if is_healthy(server.port).await {
-                return Ok(server.port);
-            }
-            // Server died — fall through to restart
+        if server.model_id == model_id && is_healthy(server.port).await {
+            return Ok(server.port);
         }
     }
 
@@ -86,9 +101,7 @@ pub async fn ensure_server_running(
             "--host",
             "127.0.0.1",
             "-ngl",
-            "99", // offload all layers to GPU (silently ignored on CPU-only builds)
-            "-c",
-            "4096",          // context size
+            "99",            // offload all layers to GPU (silently ignored on CPU-only builds)
             "--jinja",       // enable full Jinja chat template support
             "--log-disable", // suppress verbose logging
         ])
@@ -135,12 +148,17 @@ pub async fn ensure_server_running(
     Ok(port)
 }
 
-/// Kill the running server if any.
-pub async fn stop_server(state: &LlmServerState) {
+/// Kill the running server only if it is serving the given model.
+/// Used before deleting a model's GGUF file — on Windows the file is
+/// memory-mapped and cannot be removed while the sidecar holds it open.
+pub async fn stop_server_for_model(state: &LlmServerState, model_id: &str) {
     let mut guard = state.inner.lock().await;
-    if let Some(server) = guard.take() {
-        let _ = server.child.kill();
-        clear_sidecar_pid();
+    let should_stop = guard.as_ref().is_some_and(|s| s.model_id == model_id);
+    if should_stop {
+        if let Some(server) = guard.take() {
+            let _ = server.child.kill();
+            clear_sidecar_pid();
+        }
     }
 }
 
@@ -152,7 +170,7 @@ pub fn preload_llm_server(
     settings_store: crate::settings::SettingsStore,
     app_handle: tauri::AppHandle,
 ) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let Ok(settings) = settings_store.load() else {
             return;
         };
@@ -231,6 +249,7 @@ pub async fn send_chat_completion(
     port: u16,
     prompt: &str,
     cancel_token: CancellationToken,
+    enable_thinking: bool,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{port}/v1/chat/completions");
@@ -240,8 +259,10 @@ pub async fn send_chat_completion(
             { "role": "user", "content": prompt }
         ],
         "temperature": 0.3,
-        "max_tokens": 4096,
-        "stream": true
+        "stream": true,
+        // Thinking mode — controlled by the caller. Models that don't
+        // support this parameter (e.g. Gemma 4) simply ignore it.
+        "chat_template_kwargs": { "enable_thinking": enable_thinking }
     });
 
     // Start the request — cancellable during connection phase
@@ -293,6 +314,9 @@ pub async fn send_chat_completion(
                     return Ok(result.trim().to_string());
                 }
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                    // Only collect "content" tokens — ignore "reasoning_content"
+                    // from thinking models so the internal chain-of-thought
+                    // doesn't leak into the user-visible result.
                     if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                         result.push_str(content);
                     }

@@ -35,6 +35,15 @@ export async function downloadModel(modelId, onProgress) {
   });
 }
 
+export async function downloadLlmModel(modelId, onProgress) {
+  const channel = new window.__TAURI__.core.Channel();
+  channel.onmessage = onProgress;
+  return await window.__TAURI__.core.invoke('ensure_llm_model_downloaded', {
+    modelId,
+    onProgress: channel,
+  });
+}
+
 export async function transcribeFile(filePath, onUpdate) {
   const channel = new window.__TAURI__.core.Channel();
   channel.onmessage = onUpdate;
@@ -112,6 +121,12 @@ extern "C" {
         on_progress: &Closure<dyn Fn(JsValue)>,
     ) -> Result<JsValue, JsValue>;
 
+    #[wasm_bindgen(catch, js_name = downloadLlmModel)]
+    async fn download_llm_model_js(
+        model_id: &str,
+        on_progress: &Closure<dyn Fn(JsValue)>,
+    ) -> Result<JsValue, JsValue>;
+
     #[wasm_bindgen(catch, js_name = transcribeFile)]
     async fn transcribe_file_js(
         file_path: &str,
@@ -156,6 +171,14 @@ pub enum HotkeyMode {
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+pub enum PostprocessProviderMode {
+    #[default]
+    Api,
+    LocalLlm,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum LiveCaptureProfile {
     #[default]
     MicrophoneOnly,
@@ -193,6 +216,8 @@ pub struct AppSettings {
     pub api_key_insecure: bool,
     pub hotkey_registration_error: Option<String>,
     pub postprocess_model: String,
+    pub postprocess_provider_mode: PostprocessProviderMode,
+    pub local_llm_model_id: String,
 }
 
 impl Default for AppSettings {
@@ -211,6 +236,8 @@ impl Default for AppSettings {
             api_key_insecure: false,
             hotkey_registration_error: None,
             postprocess_model: "gpt-4o-mini".to_string(),
+            postprocess_provider_mode: PostprocessProviderMode::Api,
+            local_llm_model_id: "llm-qwen-3.5-0.8b".to_string(),
         }
     }
 }
@@ -229,6 +256,8 @@ pub struct SaveSettingsRequest {
     pub api_key: Option<String>,
     pub clear_api_key: bool,
     pub postprocess_model: String,
+    pub postprocess_provider_mode: PostprocessProviderMode,
+    pub local_llm_model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -435,12 +464,14 @@ struct SaveTemplatesArgs {
 pub async fn run_postprocess(
     transcript_text: String,
     template_id: String,
+    enable_thinking: bool,
 ) -> Result<String, String> {
     invoke_command(
         "run_postprocess",
         RunPostprocessArgs {
             transcript_text,
             template_id,
+            enable_thinking,
         },
     )
     .await
@@ -451,6 +482,7 @@ pub async fn run_postprocess(
 struct RunPostprocessArgs {
     transcript_text: String,
     template_id: String,
+    enable_thinking: bool,
 }
 
 pub async fn delete_model(model_id: &str) -> Result<(), String> {
@@ -489,6 +521,42 @@ pub async fn preload_local_model(model_id: &str) -> Result<(), String> {
         },
     )
     .await
+}
+
+pub async fn list_local_llm_models() -> Result<Vec<LocalModelDescriptor>, String> {
+    invoke_command("list_local_llm_models", ()).await
+}
+
+pub async fn delete_llm_model(model_id: &str) -> Result<(), String> {
+    invoke_command(
+        "delete_llm_model",
+        ModelIdArg {
+            model_id: model_id.to_string(),
+        },
+    )
+    .await
+}
+
+pub async fn ensure_llm_model_downloaded(
+    model_id: &str,
+    on_progress: impl Fn(ModelDownloadProgress) + 'static,
+) -> Result<(), String> {
+    let closure = Closure::wrap(Box::new(move |value: JsValue| {
+        if let Some(progress) = parse_channel_message(&value) {
+            on_progress(progress);
+        }
+    }) as Box<dyn Fn(JsValue)>);
+
+    let result = download_llm_model_js(model_id, &closure)
+        .await
+        .map_err(js_error_message);
+
+    closure.forget();
+    result.map(|_| ())
+}
+
+pub async fn cancel_postprocess() -> Result<(), String> {
+    invoke_command("cancel_postprocess", ()).await
 }
 
 pub async fn start_live_transcription() -> Result<LiveRecordingStatus, String> {

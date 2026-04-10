@@ -4,8 +4,8 @@ use leptos::task::spawn_local;
 use crate::features::transcription::format_timestamp;
 use crate::features::transcription::TranscriptionController;
 use crate::tauri_api::{
-    list_templates, run_postprocess, save_templates, write_clipboard_text, PostProcessTemplate,
-    TranscriptResult,
+    cancel_postprocess, get_settings, list_templates, run_postprocess, save_templates,
+    write_clipboard_text, PostProcessTemplate, PostprocessProviderMode, TranscriptResult,
 };
 
 #[component]
@@ -24,6 +24,8 @@ pub fn PostProcessScreen(
     let result_text = RwSignal::new(None::<String>);
     let error_message = RwSignal::new(None::<String>);
     let copy_feedback = RwSignal::new(None::<&'static str>);
+    let postprocess_mode = RwSignal::new(PostprocessProviderMode::Api);
+    let enable_thinking = RwSignal::new(false);
 
     let apply_selection = move |id: Option<String>, source: &[PostProcessTemplate]| {
         selected_template_id.set(id.clone());
@@ -48,6 +50,10 @@ pub fn PostProcessScreen(
         save_feedback.set(None);
 
         spawn_local(async move {
+            if let Ok(settings) = get_settings().await {
+                postprocess_mode.set(settings.postprocess_provider_mode);
+            }
+
             match list_templates().await {
                 Ok(loaded) => {
                     let previous_id = selected_template_id.get_untracked();
@@ -194,7 +200,10 @@ pub fn PostProcessScreen(
 
     let run_button_label = Signal::derive(move || {
         if is_running.get() {
-            "Processing..."
+            match postprocess_mode.get() {
+                PostprocessProviderMode::LocalLlm => "Processing with local LLM...",
+                PostprocessProviderMode::Api => "Sending to API...",
+            }
         } else {
             "Run post-processing"
         }
@@ -215,7 +224,8 @@ pub fn PostProcessScreen(
         copy_feedback.set(None);
 
         spawn_local(async move {
-            match run_postprocess(text, template_id).await {
+            let thinking = enable_thinking.get_untracked();
+            match run_postprocess(text, template_id, thinking).await {
                 Ok(processed) => {
                     result_text.set(Some(processed.clone()));
                     // Write back to TranscriptionController
@@ -226,7 +236,11 @@ pub fn PostProcessScreen(
                     });
                 }
                 Err(err) => {
-                    error_message.set(Some(err));
+                    if err.contains("cancelled") {
+                        // Treat cancellation as neutral — not an error
+                    } else {
+                        error_message.set(Some(err));
+                    }
                 }
             }
             is_running.set(false);
@@ -383,6 +397,20 @@ pub fn PostProcessScreen(
                                 </div>
                             </Show>
 
+                            <Show when=move || matches!(postprocess_mode.get(), PostprocessProviderMode::LocalLlm)>
+                                <label class="checkbox-row">
+                                    <input
+                                        type="checkbox"
+                                        prop:checked=move || enable_thinking.get()
+                                        on:change=move |ev| enable_thinking.set(event_target_checked(&ev))
+                                    />
+                                    <span>"Enable thinking mode"</span>
+                                </label>
+                                <p class="field-hint">
+                                    "Lets the model reason before answering. Best with larger models (4B+). May slow down small models."
+                                </p>
+                            </Show>
+
                             <button
                                 class="primary-button postprocess-run-button"
                                 on:click=on_run_postprocess
@@ -407,6 +435,7 @@ pub fn PostProcessScreen(
                         error_message=error_message
                         is_running=is_running
                         copy_feedback=copy_feedback
+                        postprocess_mode=postprocess_mode
                     />
                 </div>
             </div>
@@ -467,6 +496,7 @@ fn PostprocessResultPanel(
     error_message: RwSignal<Option<String>>,
     is_running: RwSignal<bool>,
     copy_feedback: RwSignal<Option<&'static str>>,
+    postprocess_mode: RwSignal<PostprocessProviderMode>,
 ) -> impl IntoView {
     let has_result = Signal::derive(move || result_text.get().is_some());
     let has_error = Signal::derive(move || error_message.get().is_some());
@@ -532,7 +562,24 @@ fn PostprocessResultPanel(
             <Show when=move || is_running.get()>
                 <div class="postprocess-loading">
                     <div class="postprocess-spinner"></div>
-                    <p class="body-copy">"Sending transcript to the API for processing..."</p>
+                    <p class="body-copy">
+                        {move || match postprocess_mode.get() {
+                            PostprocessProviderMode::LocalLlm => "Processing with local LLM...",
+                            PostprocessProviderMode::Api => "Sending to API...",
+                        }}
+                    </p>
+                    <Show when=move || matches!(postprocess_mode.get(), PostprocessProviderMode::LocalLlm)>
+                        <button
+                            class="secondary-button"
+                            on:click=move |_| {
+                                spawn_local(async move {
+                                    let _ = cancel_postprocess().await;
+                                });
+                            }
+                        >
+                            "Cancel"
+                        </button>
+                    </Show>
                 </div>
             </Show>
 

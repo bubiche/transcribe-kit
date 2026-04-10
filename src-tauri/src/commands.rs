@@ -3,21 +3,23 @@ use std::sync::Arc;
 
 use tauri::ipc::Channel;
 use tauri::State;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     audio_monitor::AudioMonitorState,
     engine::{get_or_load_engine, LocalEngineState},
-    hotkeys, input_devices, live_recording,
+    hotkeys, input_devices, live_recording, llm_engine,
+    llm_engine::{LlmServerState, PostprocessCancelState},
     models::{
         ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType, LiveCaptureProfile,
         LiveRecordingResult, LiveRecordingStatus, LocalModelDescriptor, ModelDownloadProgress,
-        ModelStatus, PostProcessTemplate, ProviderMode, SaveSettingsRequest,
-        StartFileTranscriptionRequest, TranscribeLiveRecordingRequest, TranscriptResult,
-        TranscriptionStreamEvent,
+        ModelStatus, PostProcessTemplate, PostprocessProviderMode, ProviderMode,
+        SaveSettingsRequest, StartFileTranscriptionRequest, TranscribeLiveRecordingRequest,
+        TranscriptResult, TranscriptionStreamEvent,
     },
     providers::{
         api_openai_compatible::{resolve_effective_model_name, ApiCredentials},
-        local_whisper,
+        local_llm, local_whisper,
     },
     settings::SettingsStore,
     templates::TemplateStore,
@@ -370,12 +372,17 @@ pub fn save_templates(
     store.save(&templates).map_err(|error| error.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn run_postprocess(
     transcript_text: String,
     template_id: String,
+    enable_thinking: bool,
+    app: tauri::AppHandle,
     template_store: State<'_, TemplateStore>,
     settings_store: State<'_, SettingsStore>,
+    llm_server_state: State<'_, LlmServerState>,
+    cancel_state: State<'_, PostprocessCancelState>,
 ) -> Result<String, String> {
     let templates = template_store.load();
     let template = crate::templates::find_template_by_id(&templates, &template_id)
@@ -387,29 +394,138 @@ pub async fn run_postprocess(
         crate::templates::render_template_prompt(&template.prompt, &transcript_text);
 
     let settings = settings_store.load().map_err(|e| e.to_string())?;
-    let api_key =
-        settings_store
-            .get_api_key(&settings.api_base_url)
-            .map_err(|error| match &error {
-                crate::settings::SettingsError::Validation(_) => {
-                    "No API key is configured. Add an API key in Settings to use post-processing."
-                        .to_string()
-                }
-                _ => error.to_string(),
-            })?;
 
-    let credentials = ApiCredentials {
-        api_key,
-        base_url: settings.api_base_url,
-    };
+    match settings.postprocess_provider_mode {
+        PostprocessProviderMode::Api => {
+            let api_key =
+                settings_store
+                    .get_api_key(&settings.api_base_url)
+                    .map_err(|error| match &error {
+                        crate::settings::SettingsError::Validation(_) => {
+                            "No API key is configured. Add an API key in Settings to use post-processing."
+                                .to_string()
+                        }
+                        _ => error.to_string(),
+                    })?;
 
-    crate::providers::api_openai_compatible::post_process_transcript(
-        &rendered_prompt,
-        &settings.postprocess_model,
-        &credentials,
-    )
-    .await
-    .map_err(|e| e.to_string())
+            let credentials = ApiCredentials {
+                api_key,
+                base_url: settings.api_base_url,
+            };
+
+            crate::providers::api_openai_compatible::post_process_transcript(
+                &rendered_prompt,
+                &settings.postprocess_model,
+                &credentials,
+            )
+            .await
+            .map_err(|e| e.to_string())
+        }
+        PostprocessProviderMode::LocalLlm => {
+            // 1. Ensure sidecar is running with the configured model
+            let port = llm_engine::ensure_server_running(
+                &llm_server_state,
+                &app,
+                &settings.local_llm_model_id,
+            )
+            .await?;
+
+            // 2. Create cancellation token and publish it so cancel_postprocess can reach it
+            let cancel_token = CancellationToken::new();
+            {
+                cancel_state
+                    .token
+                    .lock()
+                    .unwrap()
+                    .replace(cancel_token.clone());
+            }
+
+            // 3. Send streaming chat completion to localhost sidecar
+            let result = llm_engine::send_chat_completion(
+                port,
+                &rendered_prompt,
+                cancel_token,
+                enable_thinking,
+            )
+            .await;
+
+            // 4. Clear token (no-op if cancel_postprocess already took it)
+            {
+                cancel_state.token.lock().unwrap().take();
+            }
+
+            result
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LLM model management & post-processing cancellation
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn list_local_llm_models() -> Vec<LocalModelDescriptor> {
+    local_llm::LLM_MODEL_IDS
+        .iter()
+        .map(|id| {
+            let downloaded = local_llm::expected_model_path(id)
+                .map(|p| p.exists())
+                .unwrap_or(false);
+
+            LocalModelDescriptor {
+                id: id.to_string(),
+                label: local_llm::display_label(id).to_string(),
+                engine: local_llm::ENGINE_ID.to_string(),
+                downloaded,
+                size_label: local_llm::size_label(id).to_string(),
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn get_llm_model_status(model_id: String) -> Result<ModelStatus, String> {
+    local_llm::model_status(&model_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_llm_model(
+    model_id: String,
+    llm_server_state: State<'_, LlmServerState>,
+) -> Result<(), String> {
+    // Stop the sidecar if it is serving this model — on Windows the GGUF file
+    // is memory-mapped and cannot be deleted while the process holds it open.
+    llm_engine::stop_server_for_model(&llm_server_state, &model_id).await;
+    local_llm::delete_model(&model_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ensure_llm_model_downloaded(
+    model_id: String,
+    on_progress: Channel<ModelDownloadProgress>,
+) -> Result<(), String> {
+    local_llm::download_model(&model_id, &on_progress)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn preload_local_llm_model(
+    model_id: String,
+    app: tauri::AppHandle,
+    llm_server_state: State<'_, LlmServerState>,
+) -> Result<(), String> {
+    llm_engine::ensure_server_running(&llm_server_state, &app, &model_id)
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
+pub fn cancel_postprocess(cancel_state: State<'_, PostprocessCancelState>) {
+    if let Some(token) = cancel_state.token.lock().unwrap().take() {
+        token.cancel();
+    }
 }
 
 #[tauri::command]

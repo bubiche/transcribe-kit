@@ -7,7 +7,7 @@ use crate::tauri_api::{HotkeyMode, ProviderMode};
 
 use super::components::{
     ApiConnectionCard, AutoSaveIndicator, CaptureProfileField, HotkeySettingsCard,
-    InputDeviceField, ProviderSettingsCard,
+    InputDeviceField, PostprocessSettingsCard, ProviderSettingsCard,
 };
 use super::state::{AutoSaveStatus, SettingsFeatureState};
 
@@ -43,6 +43,8 @@ pub fn SettingsScreen(
         let _ = state.form.api_base_url.get();
         let _ = state.form.clear_api_key.get();
         let _ = state.form.postprocess_model.get();
+        let _ = state.form.postprocess_provider_mode.get();
+        let _ = state.form.local_llm_model_id.get();
 
         if state.suppress_auto_save.get_untracked()
             || state.is_loading.get_untracked()
@@ -148,6 +150,7 @@ pub fn SettingsScreen(
                             settings_visible=Signal::derive(move || show_settings.get())
                         />
                         <ApiConnectionCard state=state />
+                        <PostprocessSettingsCard state=state />
                     </div>
                     <div class="settings-sidebar">
                         <HotkeySettingsCard state=state />

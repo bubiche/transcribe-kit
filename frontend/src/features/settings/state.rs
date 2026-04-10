@@ -3,10 +3,11 @@ use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
 
 use crate::tauri_api::{
-    delete_model, ensure_model_downloaded, get_settings, list_api_models, list_input_devices,
-    list_local_models, preload_local_model, save_settings, ApiModelDescriptor, AppSettings,
-    AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile, LocalModelDescriptor, ProviderMode,
-    SaveSettingsRequest,
+    delete_llm_model, delete_model, ensure_llm_model_downloaded, ensure_model_downloaded,
+    get_settings, list_api_models, list_input_devices, list_local_llm_models, list_local_models,
+    preload_local_model, save_settings, ApiModelDescriptor, AppSettings,
+    AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile, LocalModelDescriptor,
+    PostprocessProviderMode, ProviderMode, SaveSettingsRequest,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -34,6 +35,8 @@ pub struct SettingsFormState {
     pub api_key_present: RwSignal<bool>,
     pub api_key_insecure: RwSignal<bool>,
     pub postprocess_model: RwSignal<String>,
+    pub postprocess_provider_mode: RwSignal<PostprocessProviderMode>,
+    pub local_llm_model_id: RwSignal<String>,
 }
 
 impl SettingsFormState {
@@ -53,6 +56,8 @@ impl SettingsFormState {
             api_key_present: RwSignal::new(false),
             api_key_insecure: RwSignal::new(false),
             postprocess_model: RwSignal::new("gpt-4o-mini".to_string()),
+            postprocess_provider_mode: RwSignal::new(PostprocessProviderMode::Api),
+            local_llm_model_id: RwSignal::new("llm-qwen-3.5-0.8b".to_string()),
         }
     }
 
@@ -71,6 +76,9 @@ impl SettingsFormState {
         self.api_key_present.set(settings.api_key_present);
         self.api_key_insecure.set(settings.api_key_insecure);
         self.postprocess_model.set(settings.postprocess_model);
+        self.postprocess_provider_mode
+            .set(settings.postprocess_provider_mode);
+        self.local_llm_model_id.set(settings.local_llm_model_id);
         self.api_key_input.set(String::new());
         self.clear_api_key.set(false);
     }
@@ -96,6 +104,8 @@ impl SettingsFormState {
             },
             clear_api_key: self.clear_api_key.get(),
             postprocess_model: self.postprocess_model.get(),
+            postprocess_provider_mode: self.postprocess_provider_mode.get(),
+            local_llm_model_id: self.local_llm_model_id.get(),
         }
     }
 }
@@ -150,6 +160,8 @@ pub struct SettingsFeatureState {
     pub is_loading: RwSignal<bool>,
     pub is_saving: RwSignal<bool>,
     pub download: DownloadState,
+    pub llm_models: RwSignal<Vec<LocalModelDescriptor>>,
+    pub llm_download: DownloadState,
     pub warming_model_id: RwSignal<Option<String>>,
     pub warmed_model_id: RwSignal<Option<String>>,
     pub suppress_auto_save: RwSignal<bool>,
@@ -171,6 +183,8 @@ impl SettingsFeatureState {
             is_loading: RwSignal::new(true),
             is_saving: RwSignal::new(false),
             download: DownloadState::new(),
+            llm_models: RwSignal::new(Vec::new()),
+            llm_download: DownloadState::new(),
             warming_model_id: RwSignal::new(None),
             warmed_model_id: RwSignal::new(None),
             suppress_auto_save: RwSignal::new(true),
@@ -206,6 +220,7 @@ impl SettingsFeatureState {
             let local_result = list_local_models().await;
             let input_result = list_input_devices().await;
             let api_result = list_api_models().await;
+            let llm_result = list_local_llm_models().await;
             let settings_result = get_settings().await;
 
             let mut problems = Vec::new();
@@ -223,6 +238,11 @@ impl SettingsFeatureState {
             match api_result {
                 Ok(api_models) => self.api_models.set(api_models),
                 Err(error) => problems.push(format!("API models: {error}")),
+            }
+
+            match llm_result {
+                Ok(llm_models) => self.llm_models.set(llm_models),
+                Err(error) => problems.push(format!("LLM models: {error}")),
             }
 
             match settings_result {
@@ -368,6 +388,72 @@ impl SettingsFeatureState {
                 }
                 Err(error) => {
                     self.download.download_error.set(Some(error));
+                }
+            }
+        });
+    }
+
+    pub fn selected_llm_model_downloaded(self) -> Signal<bool> {
+        Signal::derive(move || {
+            let model_id = self.form.local_llm_model_id.get();
+            self.llm_models
+                .get()
+                .iter()
+                .find(|m| m.id == model_id)
+                .map(|m| m.downloaded)
+                .unwrap_or(false)
+        })
+    }
+
+    pub fn download_selected_llm_model(self) {
+        let model_id = self.form.local_llm_model_id.get();
+
+        if self.llm_download.is_downloading.get() {
+            return;
+        }
+
+        self.llm_download.reset();
+        self.llm_download.is_downloading.set(true);
+        self.llm_download
+            .download_model_id
+            .set(Some(model_id.clone()));
+
+        let download = self.llm_download;
+        spawn_local(async move {
+            let result = ensure_llm_model_downloaded(&model_id, move |progress| {
+                download.downloaded_bytes.set(progress.downloaded_bytes);
+                download.total_bytes.set(progress.total_bytes);
+            })
+            .await;
+
+            download.is_downloading.set(false);
+            download.download_model_id.set(None);
+
+            match result {
+                Ok(()) => {
+                    if let Ok(models) = list_local_llm_models().await {
+                        self.llm_models.set(models);
+                    }
+                }
+                Err(error) => {
+                    download.download_error.set(Some(error));
+                }
+            }
+        });
+    }
+
+    pub fn delete_selected_llm_model(self) {
+        let model_id = self.form.local_llm_model_id.get();
+
+        spawn_local(async move {
+            match delete_llm_model(&model_id).await {
+                Ok(()) => {
+                    if let Ok(models) = list_local_llm_models().await {
+                        self.llm_models.set(models);
+                    }
+                }
+                Err(error) => {
+                    self.llm_download.download_error.set(Some(error));
                 }
             }
         });
