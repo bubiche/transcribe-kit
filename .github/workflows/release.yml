@@ -116,6 +116,29 @@ jobs:
         shell: bash
         run: ./scripts/download-llama-server.sh ${{ matrix.target }}
 
+      - name: Filter macOS frameworks to match downloaded libraries
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          # The x86_64 llama.cpp release may omit some dylibs (e.g. Metal).
+          # Remove any framework entries from tauri.conf.json that don't exist on disk.
+          cd src-tauri
+          python3 -c "
+          import json, os
+          with open('tauri.conf.json') as f:
+              cfg = json.load(f)
+          frameworks = cfg.get('bundle', {}).get('macOS', {}).get('frameworks', [])
+          missing = [fw for fw in frameworks if not os.path.exists(fw)]
+          if missing:
+              print(f'Removing missing frameworks: {missing}')
+              cfg['bundle']['macOS']['frameworks'] = [fw for fw in frameworks if os.path.exists(fw)]
+              with open('tauri.conf.json', 'w') as f:
+                  json.dump(cfg, f, indent=2)
+                  f.write('\n')
+          else:
+              print('All frameworks present')
+          "
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
