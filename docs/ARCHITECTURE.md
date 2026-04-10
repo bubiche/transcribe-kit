@@ -4,7 +4,7 @@
 
 - **Leptos frontend** (WASM) for UX, reactive state management, and user interaction
 - **Tauri + Rust backend** for OS integrations, global hotkeys, audio capture, and local inference orchestration
-- **Provider adapters** for local models (Whisper.cpp via whisper-rs) and cloud APIs (OpenAI-compatible endpoints)
+- **Provider adapters** for local transcription (Whisper.cpp via whisper-rs), local LLM post-processing (llama-server sidecar), and cloud APIs (OpenAI-compatible endpoints)
 
 ## Workspace Layout
 
@@ -75,6 +75,7 @@ src/
 ├── engine.rs                        # LocalEngineState: Whisper model cache (load once, reuse)
 ├── transcription.rs                 # Orchestration: route to local or API, decode audio, stream results
 ├── audio.rs                         # Multi-codec decoding (Symphonia + Opus fallback), MP3 encoding
+├── llm_engine.rs                    # llama-server sidecar lifecycle, chat completion, cancellation
 ├── settings.rs                      # JSON config persistence + system keyring for API keys
 ├── templates.rs                     # Post-processing template storage and rendering
 ├── hotkeys.rs                       # Global shortcut registration, press/release event emission
@@ -85,7 +86,7 @@ src/
 │   ├── mod.rs                       # Provider interface, TranscriptionError type
 │   ├── local_whisper.rs             # Whisper.cpp adapter: model download, load, streaming inference
 │   ├── api_openai_compatible.rs     # OpenAI-compatible API: transcription + chat completions
-│   └── local_parakeet.rs            # Placeholder for future Parakeet integration
+│   └── local_llm.rs                 # Local LLM model registry, GGUF download/cache, model metadata
 └── live_recording/
     ├── mod.rs                       # LiveRecordingManager: single-stream and dual-stream capture
     └── wav_mixing.rs                # Mix mic + loopback WAV files, WAV metadata helpers
@@ -102,6 +103,8 @@ All state is thread-safe (`Arc<Mutex<T>>`), injected via Tauri's state system:
 | `LocalEngineState` | Cached Whisper model instance |
 | `HotkeyManagerState` | Current hotkey binding and errors |
 | `LiveRecordingManagerState` | Active recording session |
+| `LlmServerState` | llama-server sidecar process (child handle, port, model ID, PID) |
+| `PostprocessCancelState` | Cancellation token for in-flight post-processing |
 | `AudioMonitorState` | Active audio monitor stream |
 
 ### Events Emitted to Frontend
@@ -132,8 +135,11 @@ All state is thread-safe (`Arc<Mutex<T>>`), injected via Tauri's state system:
 ### Post-Processing
 1. User selects or creates a template (prompt with `{{transcript}}` placeholder)
 2. Template rendered with transcript text
-3. Sent to OpenAI-compatible chat completions endpoint
-4. Result displayed with copy support
+3. Route based on `postprocess_provider_mode`:
+   - **API**: send to remote OpenAI-compatible chat completions endpoint
+   - **Local LLM**: ensure llama-server sidecar is running with the selected model, then send to `http://127.0.0.1:<port>/v1/chat/completions`
+4. Streaming response with cancellation support
+5. Result displayed with copy support
 
 ## Audio Pipeline
 
@@ -153,6 +159,54 @@ All state is thread-safe (`Arc<Mutex<T>>`), injected via Tauri's state system:
 | whisper-large-v3-turbo | ~809 MB |
 
 Downloaded from Hugging Face, cached at `~/.cache/transcribe-kit/models/`.
+
+## Local LLM (llama-server Sidecar)
+
+Post-processing can run on-device using a llama-server sidecar process from llama.cpp. Unlike the Whisper engine (linked in-process via whisper-rs), the LLM runs as a separate process to avoid ggml symbol conflicts between whisper-rs and llama-cpp.
+
+```
+Tauri App Process                          Sidecar Process
++------------------------------+           +-------------------------+
+| Rust backend                 |           | llama-server            |
+|   providers/local_llm.rs     |  HTTP     |   -m model.gguf         |
+|     - model registry         | -------> |   --port <port>         |
+|     - GGUF download/cache    | <------- |   --host 127.0.0.1      |
+|                              |  JSON     |                         |
+|   llm_engine.rs              |           | OpenAI-compatible API:  |
+|     - LlmServerState         |           |   GET  /health          |
+|     - start/stop sidecar     |           |   POST /v1/chat/compl.  |
+|     - send_chat_completion() |           +-------------------------+
++------------------------------+
+```
+
+- **Lifecycle**: started on-demand when the user first runs local post-processing (or on preload). Stays running for subsequent requests. Killed on app exit or model switch.
+- **Port**: OS-assigned ephemeral port via `TcpListener::bind("127.0.0.1:0")`. Localhost only.
+- **Readiness**: polls `GET /health` until HTTP 200 with `{"status":"ok"}`.
+- **Streaming**: uses `"stream": true` for SSE responses with cancellation support.
+- **Orphan cleanup**: PID recorded on startup; orphaned processes from prior crashes are killed on next launch.
+
+### Supported LLM Models
+
+| Model ID | Model | GGUF Q4_K_M Size | Context | Notes |
+|----------|-------|------------------|---------|-------|
+| `llm-qwen-3.5-0.8b` (default) | Qwen 3.5 0.8B | ~0.50 GB | 32K | Smallest/fastest, excellent multilingual |
+| `llm-qwen-3.5-4b` | Qwen 3.5 4B | ~2.55 GB | 32K | Better quality, still reasonable |
+| `llm-gemma-4-e2b` | Gemma 4 E2B | ~2.89 GB | 128K | General purpose, long context |
+| `llm-gemma-4-e4b` | Gemma 4 E4B | ~4.64 GB | 128K | Higher quality text processing |
+
+Downloaded from Hugging Face, cached at `~/.cache/transcribe-kit/models/`.
+
+### Sidecar Binaries
+
+```
+src-tauri/binaries/
+  llama-server-aarch64-apple-darwin       (macOS ARM, Metal GPU)
+  llama-server-x86_64-apple-darwin        (macOS Intel)
+  llama-server-x86_64-unknown-linux-gnu   (Linux x64)
+  llama-server-x86_64-pc-windows-msvc.exe (Windows x64)
+```
+
+Not committed to git — downloaded via `scripts/download-llama-server.sh` during local setup and CI.
 
 ## Build Tooling
 
