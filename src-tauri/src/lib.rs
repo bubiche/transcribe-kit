@@ -17,7 +17,7 @@ use audio_monitor::AudioMonitorState;
 use engine::LocalEngineState;
 use hotkeys::HotkeyManagerState;
 use live_recording::LiveRecordingManagerState;
-use llm_engine::LlmServerState;
+use llm_engine::{LlmServerState, PostprocessCancelState};
 use settings::SettingsStore;
 use tauri::Manager;
 use templates::TemplateStore;
@@ -57,6 +57,7 @@ pub fn run() {
     let preload_hotkey_state = hotkey_state.clone();
     let llm_server_state = LlmServerState::new();
     let preload_llm_server_state = llm_server_state.clone();
+    let cancel_state = PostprocessCancelState::new();
     let live_recording_state = LiveRecordingManagerState::new();
     let audio_monitor_state = AudioMonitorState::new();
 
@@ -67,6 +68,7 @@ pub fn run() {
         .manage(hotkey_state)
         .manage(live_recording_state)
         .manage(llm_server_state)
+        .manage(cancel_state)
         .manage(audio_monitor_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -90,6 +92,12 @@ pub fn run() {
             commands::list_templates,
             commands::save_templates,
             commands::run_postprocess,
+            commands::list_local_llm_models,
+            commands::get_llm_model_status,
+            commands::delete_llm_model,
+            commands::ensure_llm_model_downloaded,
+            commands::preload_local_llm_model,
+            commands::cancel_postprocess,
             commands::start_audio_monitor,
             commands::stop_audio_monitor,
             commands::write_text_file
