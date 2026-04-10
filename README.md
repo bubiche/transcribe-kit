@@ -13,7 +13,7 @@ Cross-platform desktop transcription app built with Tauri + Leptos. Transcribe a
 - **Live recording** — push-to-talk or toggle mode with a configurable global hotkey. Works even when the app is in the background.
 - **Meeting capture** — dual-stream mode records microphone and system audio simultaneously, then mixes them into one file for transcription.
 - **Real-time streaming** — transcription segments appear as they're produced, with progress updates.
-- **Post-processing pipeline** — send transcripts through AI prompts. Ships with built-in templates (cleanup, meeting notes, summary) and supports custom user templates.
+- **Post-processing pipeline** — send transcripts through AI prompts. Ships with built-in templates (cleanup, meeting notes, summary) and supports custom user templates. Run post-processing locally with a bundled llama-server sidecar (no API key needed) or via any OpenAI-compatible API.
 - **Secure API key storage** — credentials are stored in the system keyring, not in config files.
 - **Persistent settings** — provider, model, device, hotkey, and API config auto-save with debouncing.
 - **Cross-platform** — macOS, Windows, and Linux from one codebase.
@@ -24,7 +24,8 @@ Cross-platform desktop transcription app built with Tauri + Leptos. Transcribe a
 |-------|-----------|
 | Frontend | Leptos (Rust → WASM), bundled with Trunk |
 | Desktop runtime | Tauri 2 |
-| Local inference | whisper-rs (whisper.cpp bindings) |
+| Local transcription | whisper-rs (whisper.cpp bindings) |
+| Local LLM | llama-server sidecar (llama.cpp, OpenAI-compatible HTTP API) |
 | Audio I/O | CPAL for capture, Symphonia for decoding |
 | API transport | reqwest with multipart streaming |
 | Settings | JSON config + system keyring for secrets |
@@ -36,8 +37,9 @@ frontend/src/         Leptos UI components and state
 src-tauri/src/
   commands.rs         Tauri IPC command handlers
   transcription.rs    Transcription orchestration
+  llm_engine.rs       llama-server sidecar lifecycle and chat completion
   live_recording/     Audio capture and mixing
-  providers/          Backend adapters (Whisper, OpenAI, Parakeet)
+  providers/          Backend adapters (Whisper, OpenAI, local LLM)
   settings.rs         Persistent config management
 ```
 
