@@ -148,13 +148,14 @@ main() {
                 exit 1
             fi
             cp "$extracted" "$output_path"
-            # Copy shared libraries (.dylib / .so) needed by the sidecar.
+            # Copy shared libraries needed by the sidecar.
             # llama-server uses @rpath which resolves to @loader_path, so
             # libraries must sit next to the binary.
-            for lib in "$extract_dir"/*.dylib "$extract_dir"/*.so; do
-                [ -f "$lib" ] || continue
-                cp "$lib" "$BINARIES_DIR/"
-            done
+            # On Linux, sonames look like libfoo.so.0 (extension is not .so),
+            # libraries may be in a lib/ subdirectory, and versioned names
+            # are often symlinks — use -L to follow them, cp -L to deref.
+            find -L "$extract_dir" \( -name '*.dylib' -o -name '*.so' -o -name '*.so.*' \) \
+                -exec cp -L {} "$BINARIES_DIR/" \;
             ;;
         *.zip)
             unzip -q "$archive_path" -d "$tmpdir/extracted"

@@ -136,6 +136,16 @@ jobs:
         shell: bash
         run: ./scripts/download-llama-server.sh ${{ matrix.target }}
 
+      - name: Install sidecar shared libraries for linuxdeploy
+        if: contains(matrix.target, 'linux')
+        run: |
+          # linuxdeploy resolves llama-server's .so dependencies via the
+          # system linker cache. Copy them to /usr/local/lib and run ldconfig.
+          sudo cp src-tauri/binaries/*.so* /usr/local/lib/ 2>/dev/null || true
+          sudo ldconfig
+          echo "Installed .so files:"
+          ls -la /usr/local/lib/lib{llama,mtmd,ggml}* 2>/dev/null || echo "(none found)"
+
       - name: Filter macOS frameworks to match downloaded libraries
         if: contains(matrix.target, 'apple-darwin')
         shell: bash

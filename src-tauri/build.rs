@@ -61,12 +61,15 @@ fn copy_sidecar_to_output() {
 
     // Copy shared libraries (.dylib / .so / .dll) needed by the sidecar.
     // They must be in the same directory as the binary (@loader_path rpath).
-    let lib_patterns = ["dylib", "so", "dll"];
+    // On Linux, sonames look like libfoo.so.0 — the extension is "0", not "so",
+    // so we check whether the filename contains ".so" as a substring instead.
     if let Ok(entries) = std::fs::read_dir(&binaries_src) {
         for entry in entries.flatten() {
             let path = entry.path();
+            let name_str = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if lib_patterns.contains(&ext) {
+            let is_lib = ext == "dylib" || ext == "dll" || name_str.contains(".so");
+            if is_lib {
                 let name = path.file_name().unwrap();
                 let dst = profile_dir.join(name);
                 let should_copy = !dst.exists() || {
