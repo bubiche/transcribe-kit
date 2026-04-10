@@ -8,6 +8,18 @@
     "core:app:default",
     "dialog:default",
     "global-shortcut:default",
-    "shell:default"
+    "shell:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/llama-server",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    },
+    "shell:allow-kill",
+    "shell:allow-stdin-write"
   ]
 }

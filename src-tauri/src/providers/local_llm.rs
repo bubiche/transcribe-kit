@@ -1,57 +1,64 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use directories::ProjectDirs;
-use mistralrs::{GgufModelBuilder, Model, Response, TextMessageRole, TextMessages};
 use tauri::ipc::Channel;
-use tokio_util::sync::CancellationToken;
 
 use super::TranscriptionError;
 use crate::models::{ModelDownloadProgress, ModelStatus};
 
 pub const ENGINE_ID: &str = "local-llm";
 
-pub const LLM_MODEL_IDS: &[&str] = &["llm-qwen-3-1.7b", "llm-gemma-4-e2b", "llm-gemma-4-e4b"];
+pub const LLM_MODEL_IDS: &[&str] = &[
+    "llm-qwen-3.5-0.8b",
+    "llm-qwen-3.5-4b",
+    "llm-gemma-4-e2b",
+    "llm-gemma-4-e4b",
+];
 
 struct ModelEntry {
     gguf_filename: &'static str,
     download_url: &'static str,
     size_label: &'static str,
     display_label: &'static str,
-    tok_model_id: &'static str,
 }
 
 fn model_entry(model_id: &str) -> Option<&'static ModelEntry> {
     static ENTRIES: &[(&str, ModelEntry)] = &[
         (
-            "llm-qwen-3-1.7b",
+            "llm-qwen-3.5-0.8b",
             ModelEntry {
-                gguf_filename: "Qwen3-1.7B-Q4_K_M.gguf",
-                download_url: "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/qwen3-1.7b-q4_k_m.gguf",
-                size_label: "~1.2 GB",
-                display_label: "Qwen 3 1.7B (Default)",
-                tok_model_id: "Qwen/Qwen3-1.7B",
+                gguf_filename: "Qwen3.5-0.8B-Q4_K_M.gguf",
+                download_url: "https://huggingface.co/bubiche/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
+                size_label: "~0.50 GB",
+                display_label: "Qwen 3.5 0.8B (Default)",
+            },
+        ),
+        (
+            "llm-qwen-3.5-4b",
+            ModelEntry {
+                gguf_filename: "Qwen3.5-4B-Q4_K_M.gguf",
+                download_url: "https://huggingface.co/bubiche/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+                size_label: "~2.55 GB",
+                display_label: "Qwen 3.5 4B",
             },
         ),
         (
             "llm-gemma-4-e2b",
             ModelEntry {
-                gguf_filename: "gemma-3n-E2B-it-Q4_K_M.gguf",
-                download_url: "https://huggingface.co/bartowski/gemma-3n-E2B-it-GGUF/resolve/main/gemma-3n-E2B-it-Q4_K_M.gguf",
-                size_label: "~3.5 GB",
+                gguf_filename: "gemma-4-E2B-it-Q4_K_M.gguf",
+                download_url: "https://huggingface.co/bubiche/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+                size_label: "~2.89 GB",
                 display_label: "Gemma 4 E2B",
-                tok_model_id: "google/gemma-3n-E2B-it",
             },
         ),
         (
             "llm-gemma-4-e4b",
             ModelEntry {
-                gguf_filename: "gemma-3n-E4B-it-Q4_K_M.gguf",
-                download_url: "https://huggingface.co/bartowski/gemma-3n-E4B-it-GGUF/resolve/main/gemma-3n-E4B-it-Q4_K_M.gguf",
-                size_label: "~5.3 GB",
+                gguf_filename: "gemma-4-E4B-it-Q4_K_M.gguf",
+                download_url: "https://huggingface.co/bubiche/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+                size_label: "~4.64 GB",
                 display_label: "Gemma 4 E4B",
-                tok_model_id: "google/gemma-3n-E4B-it",
             },
         ),
     ];
@@ -234,116 +241,108 @@ async fn do_download(
     Ok(final_path.to_path_buf())
 }
 
-// ---------------------------------------------------------------------------
-// LlmEngine
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[derive(Clone)]
-pub struct LlmEngine {
-    model: Arc<Model>,
-    model_id: String,
-}
-
-impl LlmEngine {
-    pub async fn load(
-        model_dir: &str,
-        gguf_filename: &str,
-        tok_model_id: &str,
-        model_id: String,
-    ) -> Result<Self, TranscriptionError> {
-        let model = GgufModelBuilder::new(model_dir, vec![gguf_filename.to_string()])
-            .with_tok_model_id(tok_model_id)
-            .with_force_cpu()
-            .build()
-            .await
-            .map_err(|e| TranscriptionError::ModelLoad(format!("{e}")))?;
-
-        Ok(Self {
-            model: Arc::new(model),
-            model_id,
-        })
-    }
-
-    pub fn model_id(&self) -> &str {
-        &self.model_id
-    }
-
-    /// Run a chat completion using streaming internally so that the request
-    /// can be cancelled via the provided `CancellationToken`.
-    ///
-    /// When the token is cancelled the stream receiver is dropped, which
-    /// causes the mistral.rs engine to stop generation at the next token
-    /// boundary.
-    pub async fn chat_completion(
-        &self,
-        prompt: &str,
-        cancel_token: CancellationToken,
-    ) -> Result<String, TranscriptionError> {
-        let messages = TextMessages::new().add_message(TextMessageRole::User, prompt);
-
-        let mut stream = self
-            .model
-            .stream_chat_request(messages)
-            .await
-            .map_err(|e| TranscriptionError::Inference(format!("{e}")))?;
-
-        let mut result = String::new();
-        loop {
-            tokio::select! {
-                chunk = stream.next() => {
-                    match chunk {
-                        Some(response) => {
-                            match response {
-                                Response::Chunk(chunk_resp) => {
-                                    if let Some(choice) = chunk_resp.choices.first() {
-                                        if let Some(ref content) = choice.delta.content {
-                                            result.push_str(content);
-                                        }
-                                    }
-                                }
-                                Response::Done(_) => break,
-                                Response::ModelError(msg, _) => {
-                                    return Err(TranscriptionError::Inference(
-                                        format!("Model error: {msg}")
-                                    ));
-                                }
-                                _ => {}
-                            }
-                        }
-                        None => break,
-                    }
-                }
-                _ = cancel_token.cancelled() => {
-                    drop(stream);
-                    return Err(TranscriptionError::Inference(
-                        "Post-processing was cancelled.".to_string()
-                    ));
-                }
-            }
+    #[test]
+    fn known_model_ids_are_recognized() {
+        for id in LLM_MODEL_IDS {
+            assert!(is_known_model_id(id), "expected '{id}' to be recognized");
         }
-
-        Ok(result.trim().to_string())
     }
 
-    /// Load an engine from a known model ID, resolving paths from the registry.
-    pub async fn load_by_model_id(model_id: &str) -> Result<Self, TranscriptionError> {
-        let entry = model_entry(model_id).ok_or_else(|| {
-            TranscriptionError::ModelLoad(format!("Unknown LLM model ID: '{model_id}'"))
-        })?;
+    #[test]
+    fn unknown_model_id_is_rejected() {
+        assert!(!is_known_model_id("not-a-model"));
+        assert!(!is_known_model_id(""));
+    }
 
-        let model_path = resolve_model_path(model_id)?;
-        let model_dir = model_path
-            .parent()
-            .ok_or_else(|| TranscriptionError::ModelLoad("Invalid model path".to_string()))?
-            .to_string_lossy()
-            .to_string();
+    #[test]
+    fn display_labels_are_non_empty() {
+        for id in LLM_MODEL_IDS {
+            let label = display_label(id);
+            assert_ne!(label, "Unknown", "missing display label for '{id}'");
+            assert!(!label.is_empty());
+        }
+    }
 
-        Self::load(
-            &model_dir,
-            entry.gguf_filename,
-            entry.tok_model_id,
-            model_id.to_string(),
-        )
-        .await
+    #[test]
+    fn unknown_model_display_label_is_unknown() {
+        assert_eq!(display_label("bogus"), "Unknown");
+    }
+
+    #[test]
+    fn size_labels_are_non_empty() {
+        for id in LLM_MODEL_IDS {
+            let label = size_label(id);
+            assert_ne!(label, "Unknown", "missing size label for '{id}'");
+            assert!(label.starts_with('~'), "size label should start with '~'");
+        }
+    }
+
+    #[test]
+    fn expected_model_path_contains_llm_models_dir() {
+        for id in LLM_MODEL_IDS {
+            let path = expected_model_path(id).expect("valid path");
+            assert!(
+                path.to_string_lossy().contains("llm-models"),
+                "path should use llm-models dir, got: {path:?}"
+            );
+            assert!(
+                path.extension().is_some_and(|ext| ext == "gguf"),
+                "path should end in .gguf, got: {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn expected_model_path_rejects_unknown_id() {
+        let result = expected_model_path("not-a-model");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn model_status_for_missing_model_shows_not_downloaded() {
+        for id in LLM_MODEL_IDS {
+            let status = model_status(id).expect("valid status");
+            assert_eq!(status.model_id, *id);
+            assert!(!status.downloaded);
+            assert!(status.size_bytes.is_none());
+        }
+    }
+
+    #[test]
+    fn registry_entries_all_have_gguf_filenames() {
+        for id in LLM_MODEL_IDS {
+            let entry = model_entry(id).expect("registry entry");
+            assert!(
+                entry.gguf_filename.ends_with(".gguf"),
+                "filename should end with .gguf: {}",
+                entry.gguf_filename
+            );
+        }
+    }
+
+    #[test]
+    fn registry_entries_all_have_download_urls() {
+        for id in LLM_MODEL_IDS {
+            let entry = model_entry(id).expect("registry entry");
+            assert!(
+                entry.download_url.starts_with("https://"),
+                "download URL should be https: {}",
+                entry.download_url
+            );
+        }
+    }
+
+    #[test]
+    fn llm_model_ids_array_matches_registry() {
+        for id in LLM_MODEL_IDS {
+            assert!(
+                model_entry(id).is_some(),
+                "LLM_MODEL_IDS contains '{id}' but registry has no entry"
+            );
+        }
     }
 }

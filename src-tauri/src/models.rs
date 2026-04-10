@@ -18,6 +18,14 @@ pub enum HotkeyMode {
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+pub enum PostprocessProviderMode {
+    #[default]
+    Api,
+    LocalLlm,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum LiveCaptureProfile {
     #[default]
     MicrophoneOnly,
@@ -39,6 +47,8 @@ pub struct AppSettings {
     pub api_key_insecure: bool,
     pub hotkey_registration_error: Option<String>,
     pub postprocess_model: String,
+    pub postprocess_provider_mode: PostprocessProviderMode,
+    pub local_llm_model_id: String,
 }
 
 impl Default for AppSettings {
@@ -57,6 +67,8 @@ impl Default for AppSettings {
             api_key_insecure: false,
             hotkey_registration_error: None,
             postprocess_model: "gpt-4o-mini".to_string(),
+            postprocess_provider_mode: PostprocessProviderMode::Api,
+            local_llm_model_id: "llm-qwen-3.5-0.8b".to_string(),
         }
     }
 }
@@ -75,6 +87,8 @@ pub struct SaveSettingsRequest {
     pub api_key: Option<String>,
     pub clear_api_key: bool,
     pub postprocess_model: String,
+    pub postprocess_provider_mode: PostprocessProviderMode,
+    pub local_llm_model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

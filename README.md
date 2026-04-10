@@ -59,6 +59,7 @@ Commands:
 ```bash
 cargo install cargo-make --locked
 cargo make setup
+./scripts/download-llama-server.sh   # download llama-server sidecar binary
 cargo make dev
 ```
 

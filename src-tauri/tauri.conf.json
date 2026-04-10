@@ -31,6 +31,9 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
+    "externalBin": [
+      "binaries/llama-server"
+    ],
     "macOS": {
       "entitlements": "entitlements.plist"
     }

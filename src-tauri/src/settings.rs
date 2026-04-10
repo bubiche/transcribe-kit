@@ -6,8 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     hotkeys,
-    models::{AppSettings, HotkeyMode, LiveCaptureProfile, ProviderMode, SaveSettingsRequest},
-    providers::api_openai_compatible::ApiCredentials,
+    models::{
+        AppSettings, HotkeyMode, LiveCaptureProfile, PostprocessProviderMode, ProviderMode,
+        SaveSettingsRequest,
+    },
+    providers::{api_openai_compatible::ApiCredentials, local_llm},
 };
 
 const KEYCHAIN_SERVICE: &str = "dev.transcribekit.desktop";
@@ -54,6 +57,10 @@ struct StoredSettings {
     api_base_url: String,
     #[serde(default = "default_postprocess_model")]
     postprocess_model: String,
+    #[serde(default)]
+    postprocess_provider_mode: PostprocessProviderMode,
+    #[serde(default = "default_local_llm_model_id")]
+    local_llm_model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     api_key_plaintext: Option<String>,
 }
@@ -90,6 +97,8 @@ impl Default for StoredSettings {
             api_custom_model_name: defaults.api_custom_model_name,
             api_base_url: defaults.api_base_url,
             postprocess_model: defaults.postprocess_model,
+            postprocess_provider_mode: defaults.postprocess_provider_mode,
+            local_llm_model_id: defaults.local_llm_model_id,
             api_key_plaintext: None,
         }
     }
@@ -148,6 +157,8 @@ impl SettingsStore {
             api_key_insecure: !self.keyring_available && api_key_present,
             hotkey_registration_error: None,
             postprocess_model: stored.postprocess_model,
+            postprocess_provider_mode: stored.postprocess_provider_mode,
+            local_llm_model_id: stored.local_llm_model_id,
         })
     }
 
@@ -177,6 +188,8 @@ impl SettingsStore {
             api_custom_model_name: request.api_custom_model_name,
             api_base_url: normalize_base_url(&request.api_base_url),
             postprocess_model: request.postprocess_model,
+            postprocess_provider_mode: request.postprocess_provider_mode,
+            local_llm_model_id: request.local_llm_model_id,
             api_key_plaintext: existing_plaintext,
         };
 
@@ -366,6 +379,16 @@ fn validate_settings(
         .map_err(|message| SettingsError::Validation(message.to_string()))?;
     }
 
+    if matches!(
+        request.postprocess_provider_mode,
+        PostprocessProviderMode::LocalLlm
+    ) && !local_llm::is_known_model_id(&request.local_llm_model_id)
+    {
+        return Err(SettingsError::Validation(
+            "Select a supported local LLM model.".to_string(),
+        ));
+    }
+
     if request.api_model_id == "custom" && request.api_custom_model_name.trim().is_empty() {
         return Err(SettingsError::Validation(
             "Enter a model name for the custom API option.".to_string(),
@@ -390,6 +413,10 @@ fn validate_settings(
 
 fn default_postprocess_model() -> String {
     AppSettings::default().postprocess_model
+}
+
+fn default_local_llm_model_id() -> String {
+    AppSettings::default().local_llm_model_id
 }
 
 fn default_hotkey_mode() -> HotkeyMode {
@@ -489,6 +516,8 @@ mod tests {
                 api_key: None,
                 clear_api_key: false,
                 postprocess_model: "gpt-4o-mini".to_string(),
+                postprocess_provider_mode: PostprocessProviderMode::Api,
+                local_llm_model_id: "llm-qwen-3.5-0.8b".to_string(),
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
@@ -516,6 +545,8 @@ mod tests {
                 api_key: Some("secret".to_string()),
                 clear_api_key: false,
                 postprocess_model: "gpt-4o-mini".to_string(),
+                postprocess_provider_mode: PostprocessProviderMode::Api,
+                local_llm_model_id: "llm-qwen-3.5-0.8b".to_string(),
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
@@ -549,6 +580,8 @@ mod tests {
                 api_custom_model_name: String::new(),
                 api_base_url: "https://api.openai.com/v1".to_string(),
                 postprocess_model: "gpt-4o-mini".to_string(),
+                postprocess_provider_mode: PostprocessProviderMode::Api,
+                local_llm_model_id: "llm-qwen-3.5-0.8b".to_string(),
                 api_key_plaintext: None,
             })
             .expect("write settings");
@@ -574,6 +607,8 @@ mod tests {
                 api_key: None,
                 clear_api_key: false,
                 postprocess_model: "gpt-4o-mini".to_string(),
+                postprocess_provider_mode: PostprocessProviderMode::Api,
+                local_llm_model_id: "llm-qwen-3.5-0.8b".to_string(),
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
@@ -601,6 +636,8 @@ mod tests {
                 api_key: None,
                 clear_api_key: false,
                 postprocess_model: "gpt-4o-mini".to_string(),
+                postprocess_provider_mode: PostprocessProviderMode::Api,
+                local_llm_model_id: "llm-qwen-3.5-0.8b".to_string(),
             },
             &["whisper-base"],
             &["gpt-4o-mini-transcribe", "custom"],
@@ -677,5 +714,33 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&store.config_path).unwrap()).unwrap();
 
         assert_eq!(stored.postprocess_model, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn existing_settings_without_llm_fields_deserialize_with_defaults() {
+        let (_temp_dir, store) = temp_store();
+
+        // Simulate a settings file written before local LLM fields existed
+        let legacy_json = serde_json::json!({
+            "provider_mode": "local",
+            "local_model_id": "whisper-base",
+            "selected_input_device_id": null,
+            "live_capture_profile": "microphone-only",
+            "hotkey_mode": "push-to-talk",
+            "hotkey_shortcut": "CmdOrCtrl+Shift+T",
+            "api_model_id": "gpt-4o-mini-transcribe",
+            "api_custom_model_name": "",
+            "api_base_url": "https://api.openai.com/v1",
+            "postprocess_model": "gpt-4o-mini"
+        });
+        fs::write(&store.config_path, legacy_json.to_string()).expect("write legacy settings");
+
+        let settings = store.load().expect("load settings");
+
+        assert_eq!(
+            settings.postprocess_provider_mode,
+            PostprocessProviderMode::Api
+        );
+        assert_eq!(settings.local_llm_model_id, "llm-qwen-3.5-0.8b");
     }
 }

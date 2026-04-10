@@ -5,6 +5,7 @@ mod engine;
 mod hotkeys;
 mod input_devices;
 mod live_recording;
+mod llm_engine;
 mod models;
 mod providers;
 mod recording_tray;
@@ -16,6 +17,7 @@ use audio_monitor::AudioMonitorState;
 use engine::LocalEngineState;
 use hotkeys::HotkeyManagerState;
 use live_recording::LiveRecordingManagerState;
+use llm_engine::LlmServerState;
 use settings::SettingsStore;
 use tauri::Manager;
 use templates::TemplateStore;
@@ -53,6 +55,8 @@ pub fn run() {
     let preload_engine_state = engine_state.clone();
     let hotkey_state = HotkeyManagerState::new();
     let preload_hotkey_state = hotkey_state.clone();
+    let llm_server_state = LlmServerState::new();
+    let preload_llm_server_state = llm_server_state.clone();
     let live_recording_state = LiveRecordingManagerState::new();
     let audio_monitor_state = AudioMonitorState::new();
 
@@ -62,6 +66,7 @@ pub fn run() {
         .manage(engine_state)
         .manage(hotkey_state)
         .manage(live_recording_state)
+        .manage(llm_server_state)
         .manage(audio_monitor_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -90,6 +95,9 @@ pub fn run() {
             commands::write_text_file
         ])
         .setup(move |app| {
+            // Kill any orphaned llama-server from a previous crash before anything else
+            llm_engine::cleanup_orphaned_sidecar();
+
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.set_title("Transcribe Kit");
             }
@@ -99,6 +107,11 @@ pub fn run() {
             engine::preload_saved_local_model(
                 preload_engine_state.clone(),
                 preload_settings_store.clone(),
+            );
+            llm_engine::preload_llm_server(
+                preload_llm_server_state.clone(),
+                preload_settings_store.clone(),
+                app.handle().clone(),
             );
             preload_hotkey_state.initialize_from_settings(app.handle(), &preload_settings_store);
             Ok(())

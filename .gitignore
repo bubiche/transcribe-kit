@@ -19,3 +19,6 @@
 /frontend/dist
 /src-tauri/target
 /src-tauri/gen
+
+# llama-server sidecar binaries (downloaded at build time)
+/src-tauri/binaries/
