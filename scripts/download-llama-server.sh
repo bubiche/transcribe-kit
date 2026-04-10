@@ -4,8 +4,10 @@
 # Places it in src-tauri/binaries/ with the Tauri sidecar target-triple suffix.
 #
 # Usage:
-#   ./scripts/download-llama-server.sh            # auto-detect platform
-#   ./scripts/download-llama-server.sh <target>    # explicit target triple
+#   ./scripts/download-llama-server.sh                  # auto-detect platform
+#   ./scripts/download-llama-server.sh <target>          # explicit target triple
+#   ./scripts/download-llama-server.sh --force           # re-download even if present
+#   ./scripts/download-llama-server.sh --force <target>  # both
 #
 # Supported targets:
 #   aarch64-apple-darwin
@@ -16,7 +18,7 @@
 set -euo pipefail
 
 # Pin to a specific llama.cpp release for reproducible builds.
-LLAMA_CPP_VERSION="b8724"
+LLAMA_CPP_VERSION="b8744"
 
 REPO="ggml-org/llama.cpp"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -90,13 +92,29 @@ output_filename() {
 }
 
 main() {
-    local target="${1:-$(detect_target)}"
+    local force=false
+    local target=""
+
+    for arg in "$@"; do
+        case "$arg" in
+            --force) force=true ;;
+            *) target="$arg" ;;
+        esac
+    done
+
+    target="${target:-$(detect_target)}"
+
     local archive_name output_name server_bin
     archive_name="$(archive_name_for_target "$target")"
     output_name="$(output_filename "$target")"
     server_bin="$(server_binary_in_archive "$target")"
 
     local output_path="${BINARIES_DIR}/${output_name}"
+
+    if [ "$force" = true ] && [ -d "$BINARIES_DIR" ]; then
+        echo "Cleaning existing binaries..."
+        rm -f "$BINARIES_DIR"/llama-server-* "$BINARIES_DIR"/lib*.dylib "$BINARIES_DIR"/lib*.so "$BINARIES_DIR"/lib*.dll
+    fi
 
     if [ -f "$output_path" ]; then
         echo "Already exists: ${output_path}"
@@ -117,18 +135,26 @@ main() {
     local archive_path="${tmpdir}/${archive_name}"
     curl -fSL --progress-bar -o "$archive_path" "$download_url"
 
-    echo "Extracting ${server_bin}..."
+    echo "Extracting ${server_bin} and shared libraries..."
     case "$archive_name" in
         *.tar.gz)
             # Binary is at llama-<version>/llama-server inside the tarball
             tar -xzf "$archive_path" -C "$tmpdir"
-            local extracted="${tmpdir}/llama-${LLAMA_CPP_VERSION}/${server_bin}"
+            local extract_dir="${tmpdir}/llama-${LLAMA_CPP_VERSION}"
+            local extracted="${extract_dir}/${server_bin}"
             if [ ! -f "$extracted" ]; then
                 echo "ERROR: Expected ${extracted} not found in archive. Contents:" >&2
                 tar -tzf "$archive_path" | head -20 >&2
                 exit 1
             fi
             cp "$extracted" "$output_path"
+            # Copy shared libraries (.dylib / .so) needed by the sidecar.
+            # llama-server uses @rpath which resolves to @loader_path, so
+            # libraries must sit next to the binary.
+            for lib in "$extract_dir"/*.dylib "$extract_dir"/*.so; do
+                [ -f "$lib" ] || continue
+                cp "$lib" "$BINARIES_DIR/"
+            done
             ;;
         *.zip)
             unzip -q "$archive_path" -d "$tmpdir/extracted"
@@ -138,13 +164,22 @@ main() {
                 echo "ERROR: ${server_bin} not found in archive." >&2
                 exit 1
             fi
+            local extract_dir
+            extract_dir="$(dirname "$extracted")"
             cp "$extracted" "$output_path"
+            # Copy shared libraries (.dll) needed by the sidecar.
+            for lib in "$extract_dir"/*.dll; do
+                [ -f "$lib" ] || continue
+                cp "$lib" "$BINARIES_DIR/"
+            done
             ;;
     esac
 
     chmod +x "$output_path"
     echo "Installed: ${output_path}"
     ls -lh "$output_path"
+    echo "Shared libraries:"
+    ls -lh "$BINARIES_DIR"/*.dylib "$BINARIES_DIR"/*.so "$BINARIES_DIR"/*.dll 2>/dev/null || true
 }
 
 main "$@"
