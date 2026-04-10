@@ -91,7 +91,7 @@ pub async fn ensure_server_running(
     // Spawn sidecar
     let (mut rx, child) = app_handle
         .shell()
-        .sidecar("binaries/llama-server")
+        .sidecar("llama-server")
         .map_err(|e| format!("Failed to create llama-server command: {e}"))?
         .args([
             "-m",

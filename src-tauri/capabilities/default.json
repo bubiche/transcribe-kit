@@ -13,7 +13,7 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "binaries/llama-server",
+          "name": "llama-server",
           "sidecar": true,
           "args": true
         }

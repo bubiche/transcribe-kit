@@ -4,10 +4,9 @@ use std::path::PathBuf;
 /// `src-tauri/binaries/` into the Cargo output directory so the Tauri
 /// shell plugin can find them at runtime.
 ///
-/// Tauri resolves `sidecar("binaries/llama-server")` as
-/// `{resource_dir}/binaries/llama-server`, and the resource dir in dev
-/// mode is `target/{profile}/`.  We must therefore place the files
-/// under `target/{profile}/binaries/`.
+/// Tauri's shell plugin resolves `sidecar("llama-server")` as
+/// `{exe_dir}/llama-server`, where `exe_dir` in dev mode is
+/// `target/{profile}/`.  We place the binary and its dylibs there.
 fn copy_sidecar_to_output() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
     // OUT_DIR is e.g. target/debug/build/<crate>-<hash>/out
@@ -19,14 +18,11 @@ fn copy_sidecar_to_output() {
         .to_path_buf();
 
     let binaries_src = PathBuf::from("binaries");
-    let binaries_dst = profile_dir.join("binaries");
 
     if !binaries_src.exists() {
         // Nothing downloaded yet — skip silently.
         return;
     }
-
-    std::fs::create_dir_all(&binaries_dst).expect("create binaries output dir");
 
     // Detect target triple for the sidecar filename suffix
     let target = std::env::var("TARGET").unwrap_or_default();
@@ -39,7 +35,7 @@ fn copy_sidecar_to_output() {
     let dst_name = format!("llama-server{exe_suffix}");
 
     let src_binary = binaries_src.join(&src_name);
-    let dst_binary = binaries_dst.join(&dst_name);
+    let dst_binary = profile_dir.join(&dst_name);
     if src_binary.exists() {
         // Only copy if source is newer or destination doesn't exist
         let should_copy = !dst_binary.exists() || {
@@ -58,12 +54,13 @@ fn copy_sidecar_to_output() {
             std::fs::copy(&src_binary, &dst_binary).expect("copy llama-server binary");
             println!(
                 "cargo:warning=Copied sidecar: {src_name} -> {}",
-                binaries_dst.display()
+                profile_dir.display()
             );
         }
     }
 
-    // Copy shared libraries (.dylib / .so / .dll) needed by the sidecar
+    // Copy shared libraries (.dylib / .so / .dll) needed by the sidecar.
+    // They must be in the same directory as the binary (@loader_path rpath).
     let lib_patterns = ["dylib", "so", "dll"];
     if let Ok(entries) = std::fs::read_dir(&binaries_src) {
         for entry in entries.flatten() {
@@ -71,7 +68,7 @@ fn copy_sidecar_to_output() {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if lib_patterns.contains(&ext) {
                 let name = path.file_name().unwrap();
-                let dst = binaries_dst.join(name);
+                let dst = profile_dir.join(name);
                 let should_copy = !dst.exists() || {
                     let src_mod = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
                     let dst_mod = std::fs::metadata(&dst).and_then(|m| m.modified()).ok();

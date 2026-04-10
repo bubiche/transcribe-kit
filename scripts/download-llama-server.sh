@@ -176,6 +176,20 @@ main() {
     esac
 
     chmod +x "$output_path"
+
+    # On macOS, add @loader_path/../Frameworks rpath so the binary can find
+    # dylibs in Contents/Frameworks/ when running from a Tauri .app bundle.
+    # (The binary already has @loader_path for dev mode where dylibs sit
+    # alongside it.)
+    case "$target" in
+        *-apple-darwin)
+            if ! otool -l "$output_path" | grep -q '@loader_path/../Frameworks'; then
+                install_name_tool -add_rpath @loader_path/../Frameworks "$output_path"
+                echo "Added @loader_path/../Frameworks rpath for bundle mode"
+            fi
+            ;;
+    esac
+
     echo "Installed: ${output_path}"
     ls -lh "$output_path"
     echo "Shared libraries:"
