@@ -146,6 +146,26 @@ jobs:
           echo "Installed .so files:"
           ls -la /usr/local/lib/lib{llama,mtmd,ggml}* 2>/dev/null || echo "(none found)"
 
+      - name: Add DLL resources to Windows bundle
+        if: contains(matrix.target, 'windows')
+        shell: bash
+        run: |
+          # Windows DLLs (llama.dll, ggml.dll, etc.) must be bundled alongside
+          # the llama-server sidecar so the OS DLL loader can find them.
+          cd src-tauri
+          python -c "
+          import json
+          with open('tauri.conf.json') as f:
+              cfg = json.load(f)
+          resources = cfg['bundle'].get('resources', {})
+          resources['binaries/*.dll'] = '.'
+          cfg['bundle']['resources'] = resources
+          with open('tauri.conf.json', 'w') as f:
+              json.dump(cfg, f, indent=2)
+              f.write('\n')
+          print('Added bundle.resources for Windows DLLs')
+          "
+
       - name: Filter macOS frameworks to match downloaded libraries
         if: contains(matrix.target, 'apple-darwin')
         shell: bash
@@ -176,6 +196,71 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: --target ${{ matrix.target }} --verbose
+
+      - name: Verify shared libraries in bundle
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          bundle_dir="target/${target}/release/bundle"
+          libs="llama ggml mtmd"
+          found=0
+          total=0
+
+          echo "Verifying shared libraries for ${target}:"
+
+          if [[ "$target" == *"linux"* ]]; then
+            appimage=$(find "$bundle_dir" -name '*.AppImage' -type f | head -1)
+            if [ -z "$appimage" ]; then echo "ERROR: No AppImage found" >&2; exit 1; fi
+            chmod +x "$appimage"
+            "$appimage" --appimage-extract > /dev/null 2>&1
+            for lib in $libs; do
+              total=$((total + 1))
+              matches=$(find squashfs-root -name "lib${lib}*" -type f 2>/dev/null)
+              if [ -n "$matches" ]; then
+                echo "  OK: $matches"; found=$((found + 1))
+              else
+                echo "  MISSING: lib${lib}*.so"
+              fi
+            done
+            rm -rf squashfs-root
+
+          elif [[ "$target" == *"apple-darwin"* ]]; then
+            app=$(find "$bundle_dir" -name '*.app' -type d | head -1)
+            if [ -z "$app" ]; then echo "ERROR: No .app bundle found" >&2; exit 1; fi
+            for lib in $libs; do
+              total=$((total + 1))
+              matches=$(find "$app/Contents/Frameworks" -name "lib${lib}*" -type f 2>/dev/null)
+              if [ -n "$matches" ]; then
+                echo "  OK: $matches"; found=$((found + 1))
+              else
+                echo "  MISSING: lib${lib}*.dylib"
+              fi
+            done
+
+          elif [[ "$target" == *"windows"* ]]; then
+            nsis=$(find "$bundle_dir" -name '*.exe' -path '*/nsis/*' -type f | head -1)
+            if [ -z "$nsis" ]; then echo "ERROR: No NSIS installer found" >&2; exit 1; fi
+            # 7z is installed on Windows GHA runners but may not be on PATH in Git Bash
+            export PATH="/c/Program Files/7-Zip:$PATH"
+            if ! command -v 7z &>/dev/null; then
+              echo "ERROR: 7z not found — cannot inspect NSIS installer" >&2; exit 1
+            fi
+            contents=$(7z l "$nsis" 2>/dev/null)
+            for lib in $libs; do
+              total=$((total + 1))
+              if echo "$contents" | grep -qi "${lib}.*\.dll"; then
+                echo "  OK: ${lib}*.dll"; found=$((found + 1))
+              else
+                echo "  MISSING: ${lib}*.dll"
+              fi
+            done
+          fi
+
+          echo ""
+          echo "Found ${found}/${total} expected shared libraries"
+          if [ "$found" -ne "$total" ]; then
+            echo "ERROR: Expected shared libraries missing from bundle" >&2; exit 1
+          fi
 
   publish-release:
     name: Publish Release
