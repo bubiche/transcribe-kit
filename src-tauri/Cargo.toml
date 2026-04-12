@@ -32,6 +32,7 @@ reqwest = { version = "0.13", default-features = false, features = ["multipart",
 rfd = "0.15"
 tokio = { version = "1", features = ["rt", "macros"] }
 tokio-util = "0.7"
+uuid = { version = "1", features = ["v7"] }
 whisper-rs = "0.16"
 
 [target.'cfg(unix)'.dependencies]

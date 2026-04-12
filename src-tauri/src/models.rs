@@ -143,6 +143,47 @@ pub struct PostProcessTemplate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum NoteSource {
+    Manual,
+    Transcription,
+    PostProcessing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub id: String,
+    pub title: String,
+    pub content: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub source: NoteSource,
+}
+
+/// Lightweight listing payload — omits `content` to keep list responses small.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteSummary {
+    pub id: String,
+    pub title: String,
+    pub source: NoteSource,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl Note {
+    /// Convert to a summary by dropping the content field.
+    pub fn to_summary(&self) -> NoteSummary {
+        NoteSummary {
+            id: self.id.clone(),
+            title: self.title.clone(),
+            source: self.source.clone(),
+            created_at: self.created_at.clone(),
+            updated_at: self.updated_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptSegment {
     pub start_ms: i64,
     pub end_ms: i64,

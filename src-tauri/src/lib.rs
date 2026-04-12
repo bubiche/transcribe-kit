@@ -7,6 +7,7 @@ mod input_devices;
 mod live_recording;
 mod llm_engine;
 mod models;
+mod notes;
 mod providers;
 mod recording_tray;
 mod settings;
@@ -18,6 +19,7 @@ use engine::LocalEngineState;
 use hotkeys::HotkeyManagerState;
 use live_recording::LiveRecordingManagerState;
 use llm_engine::{LlmServerState, PostprocessCancelState};
+use notes::NoteStore;
 use settings::SettingsStore;
 use tauri::Manager;
 use templates::TemplateStore;
@@ -50,6 +52,12 @@ pub fn run() {
             "Could not initialize templates: {error}\n\nTranscribe Kit will now exit."
         )),
     };
+    let note_store = match NoteStore::new() {
+        Ok(store) => store,
+        Err(error) => fatal_dialog(&format!(
+            "Could not initialize notes: {error}\n\nTranscribe Kit will now exit."
+        )),
+    };
     let preload_settings_store = settings_store.clone();
     let engine_state = LocalEngineState::new();
     let preload_engine_state = engine_state.clone();
@@ -64,6 +72,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(settings_store)
         .manage(template_store)
+        .manage(note_store)
         .manage(engine_state)
         .manage(hotkey_state)
         .manage(live_recording_state)
@@ -100,7 +109,12 @@ pub fn run() {
             commands::cancel_postprocess,
             commands::start_audio_monitor,
             commands::stop_audio_monitor,
-            commands::write_text_file
+            commands::write_text_file,
+            commands::list_notes,
+            commands::get_note,
+            commands::create_note,
+            commands::update_note,
+            commands::delete_note
         ])
         .setup(move |app| {
             // Kill any orphaned llama-server from a previous crash before anything else

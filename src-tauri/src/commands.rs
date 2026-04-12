@@ -13,10 +13,12 @@ use crate::{
     models::{
         ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType, LiveCaptureProfile,
         LiveRecordingResult, LiveRecordingStatus, LocalModelDescriptor, ModelDownloadProgress,
-        ModelStatus, PostProcessTemplate, PostprocessProviderMode, ProviderMode,
-        SaveSettingsRequest, StartFileTranscriptionRequest, TranscribeLiveRecordingRequest,
-        TranscriptResult, TranscriptionStreamEvent,
+        ModelStatus, Note, NoteSource, NoteSummary, PostProcessTemplate,
+        PostprocessProviderMode, ProviderMode, SaveSettingsRequest,
+        StartFileTranscriptionRequest, TranscribeLiveRecordingRequest, TranscriptResult,
+        TranscriptionStreamEvent,
     },
+    notes::NoteStore,
     providers::{
         api_openai_compatible::{resolve_effective_model_name, ApiCredentials},
         local_llm, local_whisper,
@@ -540,6 +542,54 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {e}"))?;
     }
     std::fs::write(file_path, content).map_err(|e| format!("Failed to write file: {e}"))
+}
+
+#[tauri::command]
+pub fn list_notes(store: State<'_, NoteStore>) -> Vec<NoteSummary> {
+    store.list()
+}
+
+#[tauri::command]
+pub fn get_note(id: String, store: State<'_, NoteStore>) -> Option<Note> {
+    store.get(&id)
+}
+
+#[tauri::command]
+pub fn create_note(
+    title: String,
+    content: String,
+    source: NoteSource,
+    store: State<'_, NoteStore>,
+) -> Result<Note, String> {
+    let now = crate::notes::iso_now();
+    let note = Note {
+        id: crate::notes::generate_note_id(),
+        title,
+        content,
+        created_at: now.clone(),
+        updated_at: now,
+        source,
+    };
+    store.save(&note).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_note(
+    id: String,
+    title: String,
+    content: String,
+    store: State<'_, NoteStore>,
+) -> Result<Note, String> {
+    let mut note = store.get(&id).ok_or_else(|| format!("Note not found: {id}"))?;
+    note.title = title;
+    note.content = content;
+    note.updated_at = crate::notes::iso_now();
+    store.save(&note).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_note(id: String, store: State<'_, NoteStore>) -> Result<(), String> {
+    store.delete(&id).map_err(|e| e.to_string())
 }
 
 fn load_api_credentials(

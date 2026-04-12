@@ -6122,7 +6122,7 @@ dependencies = [
 
 [[package]]
 name = "transcribe-kit"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cpal",
  "directories",
@@ -6146,12 +6146,13 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
+ "uuid",
  "whisper-rs",
 ]
 
 [[package]]
 name = "transcribe-kit-frontend"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
