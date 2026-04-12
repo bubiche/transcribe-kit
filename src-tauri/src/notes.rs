@@ -127,8 +127,7 @@ impl NoteStore {
         }
         fs::create_dir_all(&self.notes_dir).map_err(SettingsError::CreateDirectory)?;
 
-        let contents =
-            serde_json::to_string_pretty(note).expect("note serialization is valid");
+        let contents = serde_json::to_string_pretty(note).expect("note serialization is valid");
         let path = self.notes_dir.join(format!("{}.json", note.id));
         fs::write(path, contents).map_err(SettingsError::WriteFile)?;
         Ok(note.clone())

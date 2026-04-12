@@ -17,6 +17,12 @@ use crate::tauri_api::{
     LiveCaptureProfile, LiveRecordingState,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveScreen {
+    Transcribe,
+    Notes,
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let show_settings = RwSignal::new(false);
@@ -41,6 +47,7 @@ pub fn App() -> impl IntoView {
             live_recording.recording_started_at_ms.get(),
         )
     });
+    let active_screen = RwSignal::new(ActiveScreen::Transcribe);
     let last_navigated_completion_nonce = RwSignal::new(None::<u64>);
 
     Effect::new(move |_| {
@@ -107,6 +114,7 @@ pub fn App() -> impl IntoView {
             &job_status,
             transcript.as_ref(),
         ) {
+            active_screen.set(ActiveScreen::Transcribe);
             show_settings.set(false);
             last_navigated_completion_nonce.set(Some(completion_nonce));
         }
@@ -116,22 +124,35 @@ pub fn App() -> impl IntoView {
         <main class="shell">
             <HotkeyActivityBanner activity=hotkey_activity />
             <LiveRecordingBanner controller=live_recording elapsed_tick=recording_elapsed_tick />
-            <AppHeader show_settings=show_settings />
+            <AppHeader active_screen=active_screen show_settings=show_settings show_postprocess=show_postprocess />
             <div class="frame">
-                <TranscribeScreen
-                    active=Signal::derive(move || !show_settings.get())
-                    show_postprocess=show_postprocess
-                    transcription=transcription
-                    live_recording=live_recording
-                    live_recording_state=live_recording_state
-                    live_recording_label=live_recording_label
-                    live_recording_elapsed_ms=live_recording_elapsed_ms
-                />
-                <div class="postprocess-inline" class:postprocess-inline-visible=move || show_postprocess.get()>
-                    <PostProcessScreen
-                        active=Signal::derive(move || show_postprocess.get())
+                // Transcribe tab — always mounted, CSS-toggled
+                <div class="tab-content" class:tab-content-active=move || active_screen.get() == ActiveScreen::Transcribe>
+                    <TranscribeScreen
+                        active=Signal::derive(move || active_screen.get() == ActiveScreen::Transcribe && !show_settings.get())
+                        show_postprocess=show_postprocess
                         transcription=transcription
+                        live_recording=live_recording
+                        live_recording_state=live_recording_state
+                        live_recording_label=live_recording_label
+                        live_recording_elapsed_ms=live_recording_elapsed_ms
                     />
+                    <div class="postprocess-inline" class:postprocess-inline-visible=move || show_postprocess.get()>
+                        <PostProcessScreen
+                            active=Signal::derive(move || show_postprocess.get() && active_screen.get() == ActiveScreen::Transcribe)
+                            transcription=transcription
+                        />
+                    </div>
+                </div>
+
+                // Notes tab — always mounted, CSS-toggled (placeholder for Phase 3)
+                <div class="tab-content" class:tab-content-active=move || active_screen.get() == ActiveScreen::Notes>
+                    <section class="panel content">
+                        <div class="hero">
+                            <h2>"Notes"</h2>
+                            <p>"Your saved notes will appear here."</p>
+                        </div>
+                    </section>
                 </div>
             </div>
             <div
@@ -313,10 +334,33 @@ mod tests {
 }
 
 #[component]
-fn AppHeader(show_settings: RwSignal<bool>) -> impl IntoView {
+fn AppHeader(
+    active_screen: RwSignal<ActiveScreen>,
+    show_settings: RwSignal<bool>,
+    show_postprocess: RwSignal<bool>,
+) -> impl IntoView {
     view! {
         <header class="app-header">
             <h1 class="app-header-brand">"Transcribe Kit"</h1>
+            <nav class="app-header-tabs">
+                <button
+                    class="app-header-tab"
+                    class:app-header-tab-active=move || active_screen.get() == ActiveScreen::Transcribe
+                    on:click=move |_| active_screen.set(ActiveScreen::Transcribe)
+                >
+                    "Transcribe"
+                </button>
+                <button
+                    class="app-header-tab"
+                    class:app-header-tab-active=move || active_screen.get() == ActiveScreen::Notes
+                    on:click=move |_| {
+                        show_postprocess.set(false);
+                        active_screen.set(ActiveScreen::Notes);
+                    }
+                >
+                    "Notes"
+                </button>
+            </nav>
             <button
                 class="app-header-settings-button"
                 on:click=move |_| show_settings.update(|open| *open = !*open)

@@ -13,10 +13,9 @@ use crate::{
     models::{
         ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType, LiveCaptureProfile,
         LiveRecordingResult, LiveRecordingStatus, LocalModelDescriptor, ModelDownloadProgress,
-        ModelStatus, Note, NoteSource, NoteSummary, PostProcessTemplate,
-        PostprocessProviderMode, ProviderMode, SaveSettingsRequest,
-        StartFileTranscriptionRequest, TranscribeLiveRecordingRequest, TranscriptResult,
-        TranscriptionStreamEvent,
+        ModelStatus, Note, NoteSource, NoteSummary, PostProcessTemplate, PostprocessProviderMode,
+        ProviderMode, SaveSettingsRequest, StartFileTranscriptionRequest,
+        TranscribeLiveRecordingRequest, TranscriptResult, TranscriptionStreamEvent,
     },
     notes::NoteStore,
     providers::{
@@ -580,7 +579,9 @@ pub fn update_note(
     content: String,
     store: State<'_, NoteStore>,
 ) -> Result<Note, String> {
-    let mut note = store.get(&id).ok_or_else(|| format!("Note not found: {id}"))?;
+    let mut note = store
+        .get(&id)
+        .ok_or_else(|| format!("Note not found: {id}"))?;
     note.title = title;
     note.content = content;
     note.updated_at = crate::notes::iso_now();
