@@ -1,0 +1,203 @@
+.notes-grid {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.6fr) 0px minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.notes-grid-resizing {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.notes-resize-handle {
+  width: 8px;
+  margin: 0 -4px;
+  cursor: col-resize;
+  border-radius: 4px;
+  align-self: stretch;
+  touch-action: none;
+  z-index: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+/* Persistent vertical line */
+.notes-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 8px 0;
+  width: 2px;
+  margin: 0 auto;
+  border-radius: 1px;
+  background: var(--line);
+  transition: background 0.15s;
+}
+
+/* Grip dots in the center */
+.notes-resize-handle::after {
+  content: "";
+  width: 4px;
+  height: 20px;
+  border-radius: 2px;
+  background-image: radial-gradient(circle, var(--muted) 1px, transparent 1px);
+  background-size: 4px 5px;
+  background-repeat: repeat-y;
+  z-index: 1;
+}
+
+.notes-resize-handle:hover,
+.notes-grid-resizing .notes-resize-handle {
+  background: rgba(31, 122, 77, 0.08);
+}
+
+.notes-resize-handle:hover::before,
+.notes-grid-resizing .notes-resize-handle::before {
+  background: rgba(31, 122, 77, 0.35);
+}
+
+.notes-list-panel {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.notes-search-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.notes-search-bar input {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  padding: 0.6rem 0.85rem;
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.notes-search-bar input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(31, 122, 77, 0.1);
+}
+
+.notes-search-bar select {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  padding: 0.6rem 0.85rem;
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.notes-list {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.notes-list-item {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.notes-list-item:hover {
+  background: rgba(31, 122, 77, 0.04);
+  border-color: rgba(31, 122, 77, 0.18);
+}
+
+.notes-list-item-active {
+  background: var(--accent-soft);
+  border-color: rgba(31, 122, 77, 0.3);
+}
+
+.notes-list-item-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notes-list-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.notes-list-item-meta .mini-chip {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.notes-editor-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.notes-content-textarea {
+  width: 100%;
+  min-height: 300px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  padding: 0.85rem 0.95rem;
+  font: inherit;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.notes-content-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(31, 122, 77, 0.1);
+}
+
+.notes-editor-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.delete-note-button {
+  color: #a14b3b;
+  border-color: rgba(161, 75, 59, 0.22);
+}
+
+.delete-note-button:hover:not(:disabled) {
+  background: rgba(161, 75, 59, 0.08);
+  border-color: rgba(161, 75, 59, 0.32);
+}
+
+.notes-editor-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--muted);
+}

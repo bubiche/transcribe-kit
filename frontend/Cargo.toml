@@ -11,4 +11,4 @@ serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["console", "Document", "Event", "EventTarget", "KeyboardEvent", "Navigator", "Window"] }
+web-sys = { version = "0.3", features = ["console", "Document", "DomRect", "Element", "Event", "EventTarget", "KeyboardEvent", "Navigator", "PointerEvent", "Window"] }

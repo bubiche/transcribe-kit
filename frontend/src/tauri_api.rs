@@ -305,6 +305,33 @@ pub struct PostProcessTemplate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum NoteSource {
+    Manual,
+    Transcription,
+    PostProcessing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub id: String,
+    pub title: String,
+    pub content: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub source: NoteSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteSummary {
+    pub id: String,
+    pub title: String,
+    pub source: NoteSource,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptSegment {
     pub start_ms: i64,
     pub end_ms: i64,
@@ -557,6 +584,60 @@ pub async fn ensure_llm_model_downloaded(
 
 pub async fn cancel_postprocess() -> Result<(), String> {
     invoke_command("cancel_postprocess", ()).await
+}
+
+pub async fn list_notes() -> Result<Vec<NoteSummary>, String> {
+    invoke_command("list_notes", ()).await
+}
+
+pub async fn get_note(id: &str) -> Result<Option<Note>, String> {
+    invoke_command("get_note", NoteIdArg { id: id.to_string() }).await
+}
+
+pub async fn create_note(
+    title: String,
+    content: String,
+    source: NoteSource,
+) -> Result<Note, String> {
+    invoke_command(
+        "create_note",
+        CreateNoteArgs {
+            title,
+            content,
+            source,
+        },
+    )
+    .await
+}
+
+pub async fn update_note(id: String, title: String, content: String) -> Result<Note, String> {
+    invoke_command("update_note", UpdateNoteArgs { id, title, content }).await
+}
+
+pub async fn delete_note(id: &str) -> Result<(), String> {
+    invoke_command("delete_note", NoteIdArg { id: id.to_string() }).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoteIdArg {
+    id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateNoteArgs {
+    title: String,
+    content: String,
+    source: NoteSource,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateNoteArgs {
+    id: String,
+    title: String,
+    content: String,
 }
 
 pub async fn start_live_transcription() -> Result<LiveRecordingStatus, String> {

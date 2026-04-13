@@ -5,6 +5,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 
 use crate::features::{
+    notes::NotesScreen,
     postprocess::PostProcessScreen,
     settings::SettingsScreen,
     transcription::{TranscribeScreen, TranscriptionController},
@@ -145,14 +146,11 @@ pub fn App() -> impl IntoView {
                     </div>
                 </div>
 
-                // Notes tab — always mounted, CSS-toggled (placeholder for Phase 3)
+                // Notes tab — always mounted, CSS-toggled
                 <div class="tab-content" class:tab-content-active=move || active_screen.get() == ActiveScreen::Notes>
-                    <section class="panel content">
-                        <div class="hero">
-                            <h2>"Notes"</h2>
-                            <p>"Your saved notes will appear here."</p>
-                        </div>
-                    </section>
+                    <NotesScreen
+                        active=Signal::derive(move || active_screen.get() == ActiveScreen::Notes && !show_settings.get())
+                    />
                 </div>
             </div>
             <div
