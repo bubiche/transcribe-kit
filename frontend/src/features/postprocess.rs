@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::features::transcription::format_timestamp;
 use crate::features::transcription::TranscriptionController;
 use crate::tauri_api::{
-    cancel_postprocess, get_settings, list_templates, run_postprocess, save_templates,
-    write_clipboard_text, PostProcessTemplate, PostprocessProviderMode, TranscriptResult,
+    cancel_postprocess, get_settings, list_notes, list_templates, run_postprocess, save_templates,
+    write_clipboard_text, NoteSummary, PostProcessTemplate, PostprocessProviderMode,
+    TranscriptResult,
 };
 
 #[component]
@@ -26,10 +29,40 @@ pub fn PostProcessScreen(
     let copy_feedback = RwSignal::new(None::<&'static str>);
     let postprocess_mode = RwSignal::new(PostprocessProviderMode::Api);
     let enable_thinking = RwSignal::new(false);
+    let note_slot_assignments = RwSignal::new(HashMap::<String, String>::new());
+    let available_notes = RwSignal::new(Vec::<NoteSummary>::new());
+
+    let detected_slots = Signal::derive(move || {
+        let prompt = editing_prompt.get();
+        let mut slots = Vec::new();
+        let pattern = "{{note";
+        let mut search_start = 0;
+        while let Some(start) = prompt[search_start..].find(pattern) {
+            let abs_start = search_start + start;
+            let after_note = abs_start + pattern.len();
+            let digit_end = prompt[after_note..]
+                .find(|c: char| !c.is_ascii_digit())
+                .map(|i| after_note + i)
+                .unwrap_or(prompt.len());
+            let digits = &prompt[after_note..digit_end];
+            if !digits.is_empty() && prompt[digit_end..].starts_with("}}") {
+                let slot_name = format!("note{digits}");
+                if !slots.contains(&slot_name) {
+                    slots.push(slot_name);
+                }
+                search_start = digit_end + 2;
+            } else {
+                search_start = after_note;
+            }
+        }
+        slots.sort();
+        slots
+    });
 
     let apply_selection = move |id: Option<String>, source: &[PostProcessTemplate]| {
         selected_template_id.set(id.clone());
         is_new_template.set(false);
+        note_slot_assignments.set(HashMap::new());
         match id.and_then(|id| source.iter().find(|t| t.id == id)) {
             Some(tpl) => {
                 editing_name.set(tpl.name.clone());
@@ -52,6 +85,10 @@ pub fn PostProcessScreen(
         spawn_local(async move {
             if let Ok(settings) = get_settings().await {
                 postprocess_mode.set(settings.postprocess_provider_mode);
+            }
+
+            if let Ok(notes) = list_notes().await {
+                available_notes.set(notes);
             }
 
             match list_templates().await {
@@ -93,6 +130,7 @@ pub fn PostProcessScreen(
         editing_prompt.set(String::new());
         is_new_template.set(true);
         save_feedback.set(None);
+        note_slot_assignments.set(HashMap::new());
     };
 
     let on_save_template = move |_| {
@@ -159,7 +197,7 @@ pub fn PostProcessScreen(
 
     let prompt_missing_placeholder = Signal::derive(move || {
         let prompt = editing_prompt.get();
-        !prompt.is_empty() && !prompt.contains("{{transcript}}")
+        !prompt.is_empty() && !prompt.contains("{{transcript}}") && detected_slots.get().is_empty()
     });
 
     let has_templates = Signal::derive(move || !templates.get().is_empty());
@@ -195,8 +233,15 @@ pub fn PostProcessScreen(
         had_result_on_load.set(has);
     });
 
-    let can_run =
-        Signal::derive(move || has_transcript.get() && has_selection.get() && !is_running.get());
+    let slots_all_assigned = Signal::derive(move || {
+        let slots = detected_slots.get();
+        let assignments = note_slot_assignments.get();
+        slots.iter().all(|s| assignments.contains_key(s))
+    });
+
+    let can_run = Signal::derive(move || {
+        has_transcript.get() && has_selection.get() && !is_running.get() && slots_all_assigned.get()
+    });
 
     let run_button_label = Signal::derive(move || {
         if is_running.get() {
@@ -223,15 +268,54 @@ pub fn PostProcessScreen(
         result_text.set(None);
         copy_feedback.set(None);
 
+        let assignments = note_slot_assignments.get_untracked();
+
         spawn_local(async move {
             let thinking = enable_thinking.get_untracked();
-            match run_postprocess(text, template_id, thinking).await {
+            match run_postprocess(text, template_id, thinking, assignments).await {
                 Ok(processed) => {
                     result_text.set(Some(processed.clone()));
+
+                    // Clone for auto-save BEFORE processed is moved into the update closure
+                    let auto_save_text = processed.clone();
+                    let auto_save_template_name = editing_name.get_untracked();
+                    let auto_save_source = transcription.transcript.with_untracked(|opt| {
+                        opt.as_ref()
+                            .and_then(|r| r.source.source_name.clone())
+                            .unwrap_or_else(|| "Unknown source".to_string())
+                    });
+
                     // Write back to TranscriptionController
                     transcription.transcript.update(|opt| {
                         if let Some(result) = opt.as_mut() {
                             result.post_processed_text = Some(processed);
+                        }
+                    });
+
+                    // Auto-save post-processing result as a note (fire-and-forget)
+                    spawn_local(async move {
+                        let date = js_sys::Date::new_0();
+                        let date_str = format!(
+                            "{}-{:02}-{:02}",
+                            date.get_full_year(),
+                            date.get_month() + 1,
+                            date.get_date(),
+                        );
+                        let title = format!(
+                            "{} - {} - {}",
+                            auto_save_template_name, auto_save_source, date_str
+                        );
+
+                        if let Err(err) = crate::tauri_api::create_note(
+                            title,
+                            auto_save_text,
+                            crate::tauri_api::NoteSource::PostProcessing,
+                        )
+                        .await
+                        {
+                            web_sys::console::warn_1(
+                                &format!("Failed to auto-save post-processing note: {err}").into(),
+                            );
                         }
                     });
                 }
@@ -368,13 +452,84 @@ pub fn PostProcessScreen(
                                 <p class="field-hint">
                                     "Use "
                                     <code>"{{transcript}}"</code>
-                                    " where you want the transcript text inserted."
+                                    " where you want the transcript text inserted. Use "
+                                    <code>"{{note1}}"</code>
+                                    ", "
+                                    <code>"{{note2}}"</code>
+                                    ", etc. to create note slots."
                                 </p>
 
                                 <Show when=move || prompt_missing_placeholder.get()>
                                     <p class="field-hint field-warning">
-                                        "This prompt does not contain {{transcript}}. The transcript text will not be included when post-processing runs."
+                                        "This prompt does not contain {{transcript}} or any note slots."
                                     </p>
+                                </Show>
+
+                                <Show when=move || !detected_slots.get().is_empty()>
+                                    <div class="note-slot-assignments">
+                                        <span class="field-label">"Note assignments"</span>
+                                        <For
+                                            each=move || detected_slots.get()
+                                            key=|slot| slot.clone()
+                                            children=move |slot| {
+                                                let slot_for_label = slot.clone();
+                                                let slot_for_change = slot.clone();
+                                                let current_value = Signal::derive({
+                                                    let slot = slot.clone();
+                                                    move || {
+                                                        note_slot_assignments
+                                                            .get()
+                                                            .get(&slot)
+                                                            .cloned()
+                                                            .unwrap_or_default()
+                                                    }
+                                                });
+                                                view! {
+                                                    <label class="field">
+                                                        <span class="field-label">{slot_for_label}</span>
+                                                        <select
+                                                            prop:value=move || current_value.get()
+                                                            on:change=move |event| {
+                                                                let value = event_target_value(&event);
+                                                                let slot = slot_for_change.clone();
+                                                                note_slot_assignments.update(|map| {
+                                                                    if value.is_empty() {
+                                                                        map.remove(&slot);
+                                                                    } else {
+                                                                        map.insert(slot, value);
+                                                                    }
+                                                                });
+                                                            }
+                                                        >
+                                                            <option value="" disabled=true selected=move || current_value.get().is_empty()>
+                                                                {move || {
+                                                                    if available_notes.get().is_empty() {
+                                                                        "No notes available"
+                                                                    } else {
+                                                                        "Select a note..."
+                                                                    }
+                                                                }}
+                                                            </option>
+                                                            <For
+                                                                each=move || available_notes.get()
+                                                                key=|note| note.id.clone()
+                                                                children=move |note| {
+                                                                    view! {
+                                                                        <option value=note.id.clone()>{note.title.clone()}</option>
+                                                                    }
+                                                                }
+                                                            />
+                                                        </select>
+                                                    </label>
+                                                }
+                                            }
+                                        />
+                                        <Show when=move || !slots_all_assigned.get()>
+                                            <p class="field-hint field-warning">
+                                                "Assign a note to each slot before running."
+                                            </p>
+                                        </Show>
+                                    </div>
                                 </Show>
                             </Show>
 

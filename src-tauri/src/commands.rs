@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -379,20 +380,42 @@ pub async fn run_postprocess(
     transcript_text: String,
     template_id: String,
     enable_thinking: bool,
+    note_slot_assignments: HashMap<String, String>,
     app: tauri::AppHandle,
     template_store: State<'_, TemplateStore>,
     settings_store: State<'_, SettingsStore>,
     llm_server_state: State<'_, LlmServerState>,
     cancel_state: State<'_, PostprocessCancelState>,
+    note_store: State<'_, NoteStore>,
 ) -> Result<String, String> {
     let templates = template_store.load();
     let template = crate::templates::find_template_by_id(&templates, &template_id)
         .ok_or_else(|| format!("Template not found: {template_id}"))?;
 
-    crate::templates::validate_template_placeholder(&template.prompt).map_err(|e| e.to_string())?;
+    let has_transcript = template.prompt.contains("{{transcript}}");
+    let has_note_slots = !crate::templates::extract_note_slots(&template.prompt).is_empty();
+    if !has_transcript && !has_note_slots {
+        return Err(
+            "Template prompt must contain {{transcript}} or at least one {{noteN}} slot."
+                .to_string(),
+        );
+    }
+
+    // Resolve only the slots that actually appear in the prompt (the frontend
+    // map may contain stale entries for slots the user removed from the text).
+    let required_slots = crate::templates::extract_note_slots(&template.prompt);
+    let mut note_contents: HashMap<String, String> = HashMap::new();
+    for slot_name in &required_slots {
+        if let Some(note_id) = note_slot_assignments.get(slot_name) {
+            let note = note_store.get(note_id).ok_or_else(|| {
+                format!("Note not found for slot {slot_name} (it may have been deleted): {note_id}")
+            })?;
+            note_contents.insert(slot_name.clone(), note.content);
+        }
+    }
 
     let rendered_prompt =
-        crate::templates::render_template_prompt(&template.prompt, &transcript_text);
+        crate::templates::render_template(&template.prompt, &transcript_text, &note_contents)?;
 
     let settings = settings_store.load().map_err(|e| e.to_string())?;
 

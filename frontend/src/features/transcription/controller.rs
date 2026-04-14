@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 use crate::tauri_api::{
     InputType, TranscriptResult, TranscriptSegment, TranscriptionJobState, TranscriptionJobStatus,
@@ -109,6 +110,38 @@ impl TranscriptionController {
             input_type: result.source.input_type.clone(),
             source_name: result.source.source_name.clone(),
             message: Some("Transcript ready for review.".to_string()),
+        });
+
+        // Auto-save transcription result as a note (fire-and-forget)
+        let auto_save_text = result.text.clone();
+        let auto_save_source_name = result.source.source_name.clone();
+        let auto_save_input_type = result.source.input_type.clone();
+        spawn_local(async move {
+            let date = js_sys::Date::new_0();
+            let date_str = format!(
+                "{}-{:02}-{:02}",
+                date.get_full_year(),
+                date.get_month() + 1,
+                date.get_date(),
+            );
+            let source_label =
+                auto_save_source_name.unwrap_or_else(|| match auto_save_input_type {
+                    InputType::Live => "Live recording".to_string(),
+                    InputType::File => "Unknown file".to_string(),
+                });
+            let title = format!("Transcription - {} - {}", source_label, date_str);
+
+            if let Err(err) = crate::tauri_api::create_note(
+                title,
+                auto_save_text,
+                crate::tauri_api::NoteSource::Transcription,
+            )
+            .await
+            {
+                web_sys::console::warn_1(
+                    &format!("Failed to auto-save transcription note: {err}").into(),
+                );
+            }
         });
     }
 

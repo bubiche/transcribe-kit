@@ -68,7 +68,7 @@ impl NoteStore {
     }
 
     #[cfg(test)]
-    fn with_dir(dir: PathBuf) -> Self {
+    pub(crate) fn with_dir(dir: PathBuf) -> Self {
         Self { notes_dir: dir }
     }
 
@@ -146,40 +146,6 @@ impl NoteStore {
             fs::remove_file(path).map_err(SettingsError::WriteFile)?;
         }
         Ok(())
-    }
-
-    #[allow(dead_code)] // Used by template interpolation in Phase 4
-    pub fn find_by_title(&self, title: &str) -> Option<Note> {
-        if !self.notes_dir.is_dir() {
-            return None;
-        }
-
-        let entries = fs::read_dir(&self.notes_dir).ok()?;
-
-        let mut best: Option<Note> = None;
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let contents = match fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let note: Note = match serde_json::from_str(&contents) {
-                Ok(n) => n,
-                Err(_) => continue,
-            };
-            if note.title == title {
-                best = Some(match best {
-                    Some(prev) if prev.updated_at >= note.updated_at => prev,
-                    _ => note,
-                });
-            }
-        }
-
-        best
     }
 }
 
@@ -316,44 +282,6 @@ mod tests {
         assert!(store.delete("../etc/passwd").is_err());
         assert!(store.delete("foo/bar").is_err());
         assert!(store.delete("foo\\bar").is_err());
-    }
-
-    #[test]
-    fn find_by_title_returns_most_recent() {
-        let (_temp_dir, store) = temp_store();
-
-        let older = Note {
-            id: "note-older".to_string(),
-            title: "Same Title".to_string(),
-            content: "Old content".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-            updated_at: "2026-01-01T00:00:00Z".to_string(),
-            source: NoteSource::Manual,
-        };
-        let newer = Note {
-            id: "note-newer".to_string(),
-            title: "Same Title".to_string(),
-            content: "New content".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-            updated_at: "2026-06-01T00:00:00Z".to_string(),
-            source: NoteSource::Manual,
-        };
-
-        store.save(&older).expect("save older");
-        store.save(&newer).expect("save newer");
-
-        let found = store.find_by_title("Same Title").expect("found");
-        assert_eq!(found.id, "note-newer");
-    }
-
-    #[test]
-    fn find_by_title_returns_none_when_not_found() {
-        let (_temp_dir, store) = temp_store();
-
-        let note = sample_note("note-1", "Existing", "2026-01-01T00:00:00Z");
-        store.save(&note).expect("save");
-
-        assert!(store.find_by_title("Nonexistent").is_none());
     }
 
     #[test]

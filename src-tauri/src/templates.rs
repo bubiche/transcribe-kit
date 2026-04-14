@@ -2,6 +2,8 @@ use std::{fs, path::PathBuf};
 
 use directories::ProjectDirs;
 
+use std::collections::HashMap;
+
 use crate::{models::PostProcessTemplate, settings::SettingsError};
 
 #[derive(Debug, Clone)]
@@ -56,20 +58,72 @@ pub fn find_template_by_id<'a>(
     templates.iter().find(|t| t.id == template_id)
 }
 
-/// Validate that a template prompt contains the `{{transcript}}` placeholder.
-pub fn validate_template_placeholder(prompt: &str) -> Result<(), String> {
-    if !prompt.contains("{{transcript}}") {
-        return Err(
-            "The selected template is missing the {{transcript}} placeholder in its prompt."
-                .to_string(),
-        );
+/// Extract sorted, deduplicated note slot names from a prompt.
+///
+/// Scans for `{{note` followed by one or more digits then `}}`.
+/// Returns e.g. `["note1", "note2"]`.
+pub fn extract_note_slots(prompt: &str) -> Vec<String> {
+    let pattern = "{{note";
+    let mut slots = Vec::new();
+    let mut search_start = 0;
+
+    while let Some(start) = prompt[search_start..].find(pattern) {
+        let abs_start = search_start + start;
+        let after_note = abs_start + pattern.len();
+
+        // Read digits immediately after "{{note"
+        let digit_end = prompt[after_note..]
+            .find(|c: char| !c.is_ascii_digit())
+            .map(|i| after_note + i)
+            .unwrap_or(prompt.len());
+
+        let digits = &prompt[after_note..digit_end];
+
+        if !digits.is_empty() && prompt[digit_end..].starts_with("}}") {
+            let slot_name = format!("note{digits}");
+            if !slots.contains(&slot_name) {
+                slots.push(slot_name);
+            }
+            search_start = digit_end + 2;
+        } else {
+            search_start = after_note;
+        }
     }
-    Ok(())
+
+    slots.sort();
+    slots
 }
 
-/// Replace the `{{transcript}}` placeholder with the actual transcript text.
-pub fn render_template_prompt(prompt: &str, transcript_text: &str) -> String {
-    prompt.replace("{{transcript}}", transcript_text)
+/// Replace `{{transcript}}` and `{{noteN}}` placeholders in a prompt.
+///
+/// `note_contents` maps slot name (e.g. "note1") to the note's text content.
+/// Returns `Err` listing any unresolved `{{noteN}}` placeholders still present.
+pub fn render_template(
+    prompt: &str,
+    transcript_text: &str,
+    note_contents: &HashMap<String, String>,
+) -> Result<String, String> {
+    let mut rendered = prompt.replace("{{transcript}}", transcript_text);
+
+    for (slot_name, content) in note_contents {
+        let placeholder = format!("{{{{{slot_name}}}}}");
+        rendered = rendered.replace(&placeholder, content);
+    }
+
+    // Check for any unresolved {{noteN}} placeholders
+    let unresolved = extract_note_slots(&rendered);
+    if !unresolved.is_empty() {
+        return Err(format!(
+            "Unresolved note slots: {}",
+            unresolved
+                .iter()
+                .map(|s| format!("{{{{{s}}}}}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    Ok(rendered)
 }
 
 pub fn default_templates() -> Vec<PostProcessTemplate> {
@@ -265,67 +319,107 @@ mod tests {
         assert!(found.is_none());
     }
 
-    // ---- validate_template_placeholder ----
+    // ---- extract_note_slots ----
 
     #[test]
-    fn validate_placeholder_accepts_prompt_with_placeholder() {
-        assert!(validate_template_placeholder("Summarize: {{transcript}}").is_ok());
+    fn extract_note_slots_finds_single_slot() {
+        let slots = extract_note_slots("Context: {{note1}}");
+        assert_eq!(slots, vec!["note1"]);
     }
 
     #[test]
-    fn validate_placeholder_accepts_placeholder_in_middle() {
-        assert!(validate_template_placeholder("Before {{transcript}} after").is_ok());
+    fn extract_note_slots_finds_multiple_sorted() {
+        let slots = extract_note_slots("{{note2}} then {{note1}}");
+        assert_eq!(slots, vec!["note1", "note2"]);
     }
 
     #[test]
-    fn validate_placeholder_rejects_prompt_without_placeholder() {
-        let error = validate_template_placeholder("No placeholder here").unwrap_err();
-        assert!(error.contains("{{transcript}}"));
+    fn extract_note_slots_deduplicates() {
+        let slots = extract_note_slots("{{note1}} and {{note1}} again");
+        assert_eq!(slots, vec!["note1"]);
     }
 
     #[test]
-    fn validate_placeholder_rejects_empty_prompt() {
-        assert!(validate_template_placeholder("").is_err());
+    fn extract_note_slots_ignores_transcript() {
+        let slots = extract_note_slots("{{transcript}} only");
+        assert!(slots.is_empty());
     }
 
     #[test]
-    fn validate_placeholder_rejects_partial_placeholder() {
-        assert!(validate_template_placeholder("{{transcri}}").is_err());
-        assert!(validate_template_placeholder("{transcript}").is_err());
-    }
-
-    // ---- render_template_prompt ----
-
-    #[test]
-    fn render_template_prompt_replaces_placeholder_with_transcript() {
-        let rendered = render_template_prompt("Summarize: {{transcript}}", "Hello world");
-        assert_eq!(rendered, "Summarize: Hello world");
+    fn extract_note_slots_ignores_non_digit_suffix() {
+        let slots = extract_note_slots("{{noteABC}}");
+        assert!(slots.is_empty());
     }
 
     #[test]
-    fn render_template_prompt_handles_empty_transcript() {
-        let rendered = render_template_prompt("Summarize: {{transcript}}", "");
-        assert_eq!(rendered, "Summarize: ");
+    fn extract_note_slots_returns_empty_for_no_slots() {
+        let slots = extract_note_slots("Just plain text.");
+        assert!(slots.is_empty());
+    }
+
+    // ---- render_template ----
+
+    #[test]
+    fn render_template_replaces_transcript_only() {
+        let notes = HashMap::new();
+        let result = render_template("Say: {{transcript}}", "hello", &notes);
+        assert_eq!(result.unwrap(), "Say: hello");
     }
 
     #[test]
-    fn render_template_prompt_replaces_multiple_occurrences() {
-        let rendered =
-            render_template_prompt("First: {{transcript}}\nSecond: {{transcript}}", "text");
-        assert_eq!(rendered, "First: text\nSecond: text");
+    fn render_template_replaces_single_note_slot() {
+        let mut notes = HashMap::new();
+        notes.insert("note1".to_string(), "Meeting context.".to_string());
+        let result = render_template("Context: {{note1}}", "", &notes);
+        assert_eq!(result.unwrap(), "Context: Meeting context.");
     }
 
     #[test]
-    fn render_template_prompt_preserves_special_characters_in_transcript() {
-        let transcript = "He said \"hello\" & 'goodbye' <tag> $100";
-        let rendered = render_template_prompt("{{transcript}}", transcript);
-        assert_eq!(rendered, transcript);
+    fn render_template_replaces_multiple_slots() {
+        let mut notes = HashMap::new();
+        notes.insert("note1".to_string(), "First note.".to_string());
+        notes.insert("note2".to_string(), "Second note.".to_string());
+        let result = render_template("A: {{note1}}\nB: {{note2}}", "", &notes);
+        let rendered = result.unwrap();
+        assert!(rendered.contains("A: First note."));
+        assert!(rendered.contains("B: Second note."));
     }
 
     #[test]
-    fn render_template_prompt_handles_multiline_transcript() {
-        let transcript = "Line 1\nLine 2\nLine 3";
-        let rendered = render_template_prompt("Notes:\n{{transcript}}", transcript);
-        assert_eq!(rendered, "Notes:\nLine 1\nLine 2\nLine 3");
+    fn render_template_replaces_transcript_and_notes() {
+        let mut notes = HashMap::new();
+        notes.insert("note1".to_string(), "Prior notes.".to_string());
+        let result = render_template(
+            "Transcript: {{transcript}}\nContext: {{note1}}",
+            "Hello world",
+            &notes,
+        );
+        let rendered = result.unwrap();
+        assert!(rendered.contains("Transcript: Hello world"));
+        assert!(rendered.contains("Context: Prior notes."));
+    }
+
+    #[test]
+    fn render_template_errors_on_unresolved_slot() {
+        let notes = HashMap::new();
+        let result = render_template("See: {{note1}}", "", &notes);
+        let err = result.unwrap_err();
+        assert!(err.contains("note1"));
+    }
+
+    #[test]
+    fn render_template_no_placeholders() {
+        let notes = HashMap::new();
+        let result = render_template("No placeholders.", "", &notes);
+        assert_eq!(result.unwrap(), "No placeholders.");
+    }
+
+    #[test]
+    fn render_template_same_note_in_multiple_slots() {
+        let mut notes = HashMap::new();
+        notes.insert("note1".to_string(), "Same content.".to_string());
+        // note1 appears twice in the prompt
+        let result = render_template("A: {{note1}} B: {{note1}}", "", &notes);
+        assert_eq!(result.unwrap(), "A: Same content. B: Same content.");
     }
 }

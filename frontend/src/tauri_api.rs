@@ -492,6 +492,7 @@ pub async fn run_postprocess(
     transcript_text: String,
     template_id: String,
     enable_thinking: bool,
+    note_slot_assignments: std::collections::HashMap<String, String>,
 ) -> Result<String, String> {
     invoke_command(
         "run_postprocess",
@@ -499,6 +500,7 @@ pub async fn run_postprocess(
             transcript_text,
             template_id,
             enable_thinking,
+            note_slot_assignments,
         },
     )
     .await
@@ -510,6 +512,7 @@ struct RunPostprocessArgs {
     transcript_text: String,
     template_id: String,
     enable_thinking: bool,
+    note_slot_assignments: std::collections::HashMap<String, String>,
 }
 
 pub async fn delete_model(model_id: &str) -> Result<(), String> {
