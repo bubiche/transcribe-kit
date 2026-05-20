@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 cpal = "0.17.3"
-directories = "5"
+directories = "6"
 hound = "3"
 keyring = { version = "3", default-features = false, features = ["apple-native", "linux-native", "windows-native"] }
 serde = { version = "1", features = ["derive"] }
@@ -26,7 +26,7 @@ tauri = { version = "2", features = ["tray-icon", "devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-shell = "2"
-thiserror = "1"
+thiserror = "2"
 mp3lame-encoder = "0.2"
 reqwest = { version = "0.13", default-features = false, features = ["multipart", "json", "rustls", "stream"] }
 rfd = "0.15"

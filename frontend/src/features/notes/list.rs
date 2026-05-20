@@ -53,7 +53,7 @@ pub fn NoteListPanel(
             .into_iter()
             .filter(|note| {
                 (query.is_empty() || note.title.to_lowercase().contains(&query))
-                    && filter.as_ref().map_or(true, |f| &note.source == f)
+                    && filter.as_ref().is_none_or(|f| &note.source == f)
             })
             .collect::<Vec<_>>()
     });
