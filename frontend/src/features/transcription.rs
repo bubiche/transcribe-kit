@@ -12,7 +12,7 @@ use crate::tauri_api::{
     ProviderMode,
 };
 
-pub use self::controller::TranscriptionController;
+pub use self::controller::{auto_save_transcription_note, TranscriptionController};
 pub use self::panels::{JobStatusPanel, TranscriptResultPanel};
 use self::utils::file_name_from_path;
 
@@ -210,6 +210,7 @@ pub fn TranscribeScreen(
             .await
             {
                 Ok(result) => {
+                    auto_save_transcription_note(&result);
                     transcription.complete_job(result);
                 }
                 Err(error) => {

@@ -334,7 +334,10 @@ async fn run_live_transcription(
     )
     .await
     {
-        Ok(result) => apply_live_transcription_succeeded(controller, &source_name, result),
+        Ok(result) => {
+            crate::features::transcription::auto_save_transcription_note(&result);
+            apply_live_transcription_succeeded(controller, &source_name, result);
+        }
         Err(error) => apply_live_transcription_failed(controller, &source_name, &error),
     }
 }

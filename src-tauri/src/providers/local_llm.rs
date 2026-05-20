@@ -117,18 +117,22 @@ pub fn resolve_model_path(model_id: &str) -> Result<PathBuf, TranscriptionError>
 
 pub fn model_status(model_id: &str) -> Result<ModelStatus, TranscriptionError> {
     let path = expected_model_path(model_id)?;
+    Ok(status_for_path(model_id, &path))
+}
+
+fn status_for_path(model_id: &str, path: &Path) -> ModelStatus {
     let downloaded = path.exists();
     let size_bytes = if downloaded {
-        std::fs::metadata(&path).ok().map(|m| m.len())
+        std::fs::metadata(path).ok().map(|m| m.len())
     } else {
         None
     };
 
-    Ok(ModelStatus {
+    ModelStatus {
         model_id: model_id.to_string(),
         downloaded,
         size_bytes,
-    })
+    }
 }
 
 pub fn delete_model(model_id: &str) -> Result<(), TranscriptionError> {
@@ -303,13 +307,26 @@ mod tests {
     }
 
     #[test]
-    fn model_status_for_missing_model_shows_not_downloaded() {
+    fn status_for_path_reports_not_downloaded_when_file_missing() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
         for id in LLM_MODEL_IDS {
-            let status = model_status(id).expect("valid status");
+            let path = temp.path().join(format!("{id}.gguf"));
+            let status = status_for_path(id, &path);
             assert_eq!(status.model_id, *id);
             assert!(!status.downloaded);
             assert!(status.size_bytes.is_none());
         }
+    }
+
+    #[test]
+    fn status_for_path_reports_downloaded_with_size_when_file_present() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = temp.path().join("model.gguf");
+        std::fs::write(&path, b"hello world").expect("write model");
+        let status = status_for_path("llm-qwen-3.5-0.8b", &path);
+        assert_eq!(status.model_id, "llm-qwen-3.5-0.8b");
+        assert!(status.downloaded);
+        assert_eq!(status.size_bytes, Some(11));
     }
 
     #[test]
