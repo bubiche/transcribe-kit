@@ -5,9 +5,22 @@ use leptos::task::spawn_local;
 
 use crate::tauri_api::{
     cancel_postprocess, get_note, get_settings, list_notes, list_templates, run_postprocess,
-    save_templates, write_clipboard_text, NoteSummary, PostProcessTemplate,
-    PostprocessProviderMode,
+    run_postprocess_follow_up, save_templates, write_clipboard_text, ChatMessage, NoteSummary,
+    PostProcessTemplate, PostprocessProviderMode,
 };
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatTurn {
+    pub id: u64,
+    pub role: ChatRole,
+    pub content: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChatRole {
+    User,
+    Assistant,
+}
 
 #[component]
 pub fn ProcessScreen(
@@ -23,7 +36,17 @@ pub fn ProcessScreen(
 
     let input_text = RwSignal::new(String::new());
     let is_running = RwSignal::new(false);
-    let result_text = RwSignal::new(None::<String>);
+    let initial_prompt = RwSignal::new(None::<String>);
+    let turns = RwSignal::new(Vec::<ChatTurn>::new());
+    let next_turn_id = RwSignal::new(0u64);
+    let thread_template_name = RwSignal::new(None::<String>);
+    let follow_up_input = RwSignal::new(String::new());
+
+    let next_id = move || {
+        let id = next_turn_id.get_untracked();
+        next_turn_id.set(id + 1);
+        id
+    };
     let error_message = RwSignal::new(None::<String>);
     let copy_feedback = RwSignal::new(None::<&'static str>);
     let postprocess_mode = RwSignal::new(PostprocessProviderMode::Api);
@@ -241,21 +264,97 @@ pub fn ProcessScreen(
 
         is_running.set(true);
         error_message.set(None);
-        result_text.set(None);
+        initial_prompt.set(None);
+        turns.set(Vec::new());
+        next_turn_id.set(0);
+        thread_template_name.set(None);
+        follow_up_input.set(String::new());
         copy_feedback.set(None);
 
         let assignments = note_slot_assignments.get_untracked();
+        let template_name_snapshot = editing_name.get_untracked();
 
         spawn_local(async move {
             let thinking = enable_thinking.get_untracked();
             match run_postprocess(text, template_id, thinking, assignments).await {
-                Ok(processed) => {
-                    result_text.set(Some(processed));
+                Ok(result) => {
+                    initial_prompt.set(Some(result.rendered_prompt));
+                    turns.set(vec![ChatTurn {
+                        id: next_id(),
+                        role: ChatRole::Assistant,
+                        content: result.response,
+                    }]);
+                    thread_template_name.set(Some(template_name_snapshot));
                 }
                 Err(err) => {
                     if err.contains("cancelled") {
                         // Treat cancellation as neutral — not an error
                     } else {
+                        error_message.set(Some(err));
+                    }
+                }
+            }
+            is_running.set(false);
+        });
+    };
+
+    let on_send_follow_up = move || {
+        if is_running.get_untracked() {
+            return;
+        }
+        let text = follow_up_input.get_untracked();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let Some(prompt) = initial_prompt.get_untracked() else {
+            return;
+        };
+
+        let user_turn = ChatTurn {
+            id: next_id(),
+            role: ChatRole::User,
+            content: trimmed.to_string(),
+        };
+
+        turns.update(|t| t.push(user_turn.clone()));
+        follow_up_input.set(String::new());
+        error_message.set(None);
+        copy_feedback.set(None);
+        is_running.set(true);
+
+        let dto_turns: Vec<ChatMessage> = turns
+            .get_untracked()
+            .iter()
+            .map(|t| ChatMessage {
+                role: match t.role {
+                    ChatRole::User => "user".to_string(),
+                    ChatRole::Assistant => "assistant".to_string(),
+                },
+                content: t.content.clone(),
+            })
+            .collect();
+
+        spawn_local(async move {
+            let thinking = enable_thinking.get_untracked();
+            match run_postprocess_follow_up(prompt, dto_turns, thinking).await {
+                Ok(response) => {
+                    turns.update(|t| {
+                        t.push(ChatTurn {
+                            id: next_id(),
+                            role: ChatRole::Assistant,
+                            content: response,
+                        })
+                    });
+                }
+                Err(err) => {
+                    // Pop the optimistic user turn so it doesn't sit there orphaned.
+                    let mut current = turns.get_untracked();
+                    let popped = current.pop();
+                    turns.set(current);
+                    let restored = popped.map(|t| t.content).unwrap_or_default();
+                    follow_up_input.set(restored);
+                    if !err.contains("cancelled") {
                         error_message.set(Some(err));
                     }
                 }
@@ -556,13 +655,15 @@ pub fn ProcessScreen(
                         </section>
                     </Show>
 
-                    <PostprocessResultPanel
-                        result_text=result_text
+                    <PostprocessThreadPanel
+                        turns=turns
+                        thread_template_name=thread_template_name
+                        follow_up_input=follow_up_input
                         error_message=error_message
                         is_running=is_running
                         copy_feedback=copy_feedback
                         postprocess_mode=postprocess_mode
-                        editing_name=editing_name
+                        on_send_follow_up=on_send_follow_up
                     />
                 </div>
             </div>
@@ -571,20 +672,44 @@ pub fn ProcessScreen(
 }
 
 #[component]
-fn PostprocessResultPanel(
-    result_text: RwSignal<Option<String>>,
+fn PostprocessThreadPanel<F>(
+    turns: RwSignal<Vec<ChatTurn>>,
+    thread_template_name: RwSignal<Option<String>>,
+    follow_up_input: RwSignal<String>,
     error_message: RwSignal<Option<String>>,
     is_running: RwSignal<bool>,
     copy_feedback: RwSignal<Option<&'static str>>,
     postprocess_mode: RwSignal<PostprocessProviderMode>,
-    editing_name: RwSignal<String>,
-) -> impl IntoView {
-    let has_result = Signal::derive(move || result_text.get().is_some());
+    on_send_follow_up: F,
+) -> impl IntoView
+where
+    F: Fn() + Copy + Send + Sync + 'static,
+{
+    let has_thread = Signal::derive(move || !turns.get().is_empty());
+    let has_follow_ups = Signal::derive(move || turns.get().len() > 1);
     let has_error = Signal::derive(move || error_message.get().is_some());
     let export_feedback = RwSignal::new(None::<&'static str>);
-    let save_note_feedback = RwSignal::new(None::<&'static str>);
+    let save_last_feedback = RwSignal::new(None::<&'static str>);
+    let save_thread_feedback = RwSignal::new(None::<&'static str>);
 
-    let copy_button_label = Signal::derive(move || copy_feedback.get().unwrap_or("Copy result"));
+    // Reset transient feedback when the thread changes (new run, new turn).
+    Effect::new(move |_| {
+        turns.get();
+        export_feedback.set(None);
+        save_last_feedback.set(None);
+        save_thread_feedback.set(None);
+    });
+
+    let last_assistant_text = Signal::derive(move || {
+        turns
+            .get()
+            .iter()
+            .rev()
+            .find(|t| t.role == ChatRole::Assistant)
+            .map(|t| t.content.clone())
+    });
+
+    let copy_button_label = Signal::derive(move || copy_feedback.get().unwrap_or("Copy reply"));
     let copy_button_class = Signal::derive(move || match copy_feedback.get() {
         Some("Copied") => "secondary-button success",
         Some("Copy failed") => "secondary-button error",
@@ -592,25 +717,18 @@ fn PostprocessResultPanel(
     });
 
     let export_button_label =
-        Signal::derive(move || export_feedback.get().unwrap_or("Export result"));
+        Signal::derive(move || export_feedback.get().unwrap_or("Export reply"));
     let export_button_class = Signal::derive(move || match export_feedback.get() {
         Some("Exported") => "secondary-button success",
         Some("Export failed") => "secondary-button error",
         _ => "secondary-button",
     });
 
-    Effect::new(move |_| {
-        result_text.get();
-        export_feedback.set(None);
-        save_note_feedback.set(None);
-    });
-
     let on_copy = move |_: leptos::ev::MouseEvent| {
-        let Some(text) = result_text.get_untracked() else {
+        let Some(text) = last_assistant_text.get_untracked() else {
             return;
         };
         copy_feedback.set(None);
-
         spawn_local(async move {
             match write_clipboard_text(&text).await {
                 Ok(()) => copy_feedback.set(Some("Copied")),
@@ -620,11 +738,10 @@ fn PostprocessResultPanel(
     };
 
     let on_export = move |_: leptos::ev::MouseEvent| {
-        let Some(text) = result_text.get_untracked() else {
+        let Some(text) = last_assistant_text.get_untracked() else {
             return;
         };
         export_feedback.set(None);
-
         spawn_local(async move {
             match crate::tauri_api::pick_save_file("postprocess-result.txt").await {
                 Ok(Some(path)) => match crate::tauri_api::write_text_file(&path, &text).await {
@@ -637,24 +754,15 @@ fn PostprocessResultPanel(
         });
     };
 
-    let on_save_note = move |_: leptos::ev::MouseEvent| {
-        let Some(text) = result_text.get_untracked() else {
+    let on_save_last = move |_: leptos::ev::MouseEvent| {
+        let Some(text) = last_assistant_text.get_untracked() else {
             return;
         };
-        save_note_feedback.set(None);
-
-        let template_name = editing_name.get_untracked();
-
+        save_last_feedback.set(None);
+        let template_name = thread_template_name.get_untracked().unwrap_or_default();
         spawn_local(async move {
-            let date = js_sys::Date::new_0();
-            let date_str = format!(
-                "{}-{:02}-{:02}",
-                date.get_full_year(),
-                date.get_month() + 1,
-                date.get_date(),
-            );
+            let date_str = today_date_string();
             let title = format!("{} - {}", template_name, date_str);
-
             match crate::tauri_api::create_note(
                 title,
                 text,
@@ -662,24 +770,138 @@ fn PostprocessResultPanel(
             )
             .await
             {
-                Ok(_) => save_note_feedback.set(Some("Saved")),
-                Err(_) => save_note_feedback.set(Some("Save failed")),
+                Ok(_) => save_last_feedback.set(Some("Saved")),
+                Err(_) => save_last_feedback.set(Some("Save failed")),
             }
         });
     };
 
-    let save_note_button_label =
-        Signal::derive(move || save_note_feedback.get().unwrap_or("Save as note"));
-    let save_note_button_class = Signal::derive(move || match save_note_feedback.get() {
+    let on_save_thread = move |_: leptos::ev::MouseEvent| {
+        let snapshot = turns.get_untracked();
+        if snapshot.is_empty() {
+            return;
+        }
+        save_thread_feedback.set(None);
+        let template_name = thread_template_name.get_untracked().unwrap_or_default();
+        let body = render_thread_markdown(&template_name, &snapshot);
+        spawn_local(async move {
+            let date_str = today_date_string();
+            let title = format!("{} (chat) - {}", template_name, date_str);
+            match crate::tauri_api::create_note(
+                title,
+                body,
+                crate::tauri_api::NoteSource::PostProcessing,
+            )
+            .await
+            {
+                Ok(_) => save_thread_feedback.set(Some("Saved")),
+                Err(_) => save_thread_feedback.set(Some("Save failed")),
+            }
+        });
+    };
+
+    let save_last_label = Signal::derive(move || {
+        let default_label = if has_follow_ups.get() {
+            "Save last message"
+        } else {
+            "Save as note"
+        };
+        save_last_feedback.get().unwrap_or(default_label)
+    });
+    let save_last_class = Signal::derive(move || match save_last_feedback.get() {
         Some("Saved") => "secondary-button success",
         Some("Save failed") => "secondary-button error",
         _ => "secondary-button",
     });
 
+    let save_thread_label =
+        Signal::derive(move || save_thread_feedback.get().unwrap_or("Save full thread"));
+    let save_thread_class = Signal::derive(move || match save_thread_feedback.get() {
+        Some("Saved") => "secondary-button success",
+        Some("Save failed") => "secondary-button error",
+        _ => "secondary-button",
+    });
+
+    let send_disabled =
+        Signal::derive(move || is_running.get() || follow_up_input.get().trim().is_empty());
+
+    let on_follow_up_keydown = move |ev: leptos::ev::KeyboardEvent| {
+        if ev.key() == "Enter" && (ev.meta_key() || ev.ctrl_key()) {
+            ev.prevent_default();
+            on_send_follow_up();
+        }
+    };
+
+    let on_send_click = move |_: leptos::ev::MouseEvent| on_send_follow_up();
+
     view! {
         <section class="section">
             <p class="tag">"Output"</p>
             <h3>"Result"</h3>
+
+            <Show when=move || has_thread.get()>
+                <div class="stack">
+                    <div class="result-toolbar">
+                        <div class="copy-actions">
+                            <button
+                                class=move || copy_button_class.get()
+                                on:click=on_copy
+                            >
+                                {move || copy_button_label.get()}
+                            </button>
+                            <button
+                                class=move || export_button_class.get()
+                                on:click=on_export
+                            >
+                                {move || export_button_label.get()}
+                            </button>
+                            <button
+                                class=move || save_last_class.get()
+                                on:click=on_save_last
+                            >
+                                {move || save_last_label.get()}
+                            </button>
+                            <Show when=move || has_follow_ups.get()>
+                                <button
+                                    class=move || save_thread_class.get()
+                                    on:click=on_save_thread
+                                >
+                                    {move || save_thread_label.get()}
+                                </button>
+                            </Show>
+                        </div>
+                    </div>
+
+                    <div class="postprocess-thread">
+                        <For
+                            each=move || turns.get()
+                            key=|turn| turn.id
+                            children=move |turn| {
+                                let role_label = match turn.role {
+                                    ChatRole::User => "You",
+                                    ChatRole::Assistant => "Assistant",
+                                };
+                                let turn_class = match turn.role {
+                                    ChatRole::User => "postprocess-turn postprocess-turn-user",
+                                    ChatRole::Assistant => "postprocess-turn",
+                                };
+                                view! {
+                                    <article class=turn_class>
+                                        <p class="postprocess-turn-role">{role_label}</p>
+                                        <div class="postprocess-turn-body">{turn.content}</div>
+                                    </article>
+                                }
+                            }
+                        />
+                    </div>
+                </div>
+            </Show>
+
+            <Show when=move || has_error.get()>
+                <div class="postprocess-error">
+                    <p class="body-copy">{move || error_message.get().unwrap_or_default()}</p>
+                </div>
+            </Show>
 
             <Show when=move || is_running.get()>
                 <div class="postprocess-loading">
@@ -705,47 +927,66 @@ fn PostprocessResultPanel(
                 </div>
             </Show>
 
-            <Show when=move || has_error.get()>
-                <div class="postprocess-error">
-                    <p class="body-copy">{move || error_message.get().unwrap_or_default()}</p>
-                </div>
-            </Show>
-
-            <Show when=move || has_result.get()>
-                <div class="stack">
-                    <div class="result-toolbar">
-                        <div class="copy-actions">
-                            <button
-                                class=move || copy_button_class.get()
-                                on:click=on_copy
-                            >
-                                {move || copy_button_label.get()}
-                            </button>
-                            <button
-                                class=move || export_button_class.get()
-                                on:click=on_export
-                            >
-                                {move || export_button_label.get()}
-                            </button>
-                            <button
-                                class=move || save_note_button_class.get()
-                                on:click=on_save_note
-                            >
-                                {move || save_note_button_label.get()}
-                            </button>
-                        </div>
+            <Show when=move || has_thread.get() && !is_running.get()>
+                <div class="postprocess-follow-up">
+                    <textarea
+                        class="postprocess-follow-up-textarea"
+                        prop:value=move || follow_up_input.get()
+                        on:input=move |event| follow_up_input.set(event_target_value(&event))
+                        on:keydown=on_follow_up_keydown
+                        placeholder="Follow up… (⌘/Ctrl+Enter to send)"
+                        rows="3"
+                    ></textarea>
+                    <div class="postprocess-follow-up-actions">
+                        <p class="field-hint postprocess-follow-up-hint">
+                            "Press ⌘/Ctrl+Enter to send."
+                        </p>
+                        <button
+                            class="primary-button"
+                            on:click=on_send_click
+                            disabled=move || send_disabled.get()
+                        >
+                            "Send"
+                        </button>
                     </div>
-                    <div class="postprocess-output">{move || result_text.get().unwrap_or_default()}</div>
                 </div>
             </Show>
 
-            <Show when=move || !has_result.get() && !has_error.get() && !is_running.get()>
+            <Show when=move || !has_thread.get() && !has_error.get() && !is_running.get()>
                 <p class="body-copy postprocess-empty-hint">
                     "Select a template and click Run to see results here."
                 </p>
             </Show>
         </section>
     }
+}
+
+fn today_date_string() -> String {
+    let date = js_sys::Date::new_0();
+    format!(
+        "{}-{:02}-{:02}",
+        date.get_full_year(),
+        date.get_month() + 1,
+        date.get_date(),
+    )
+}
+
+fn render_thread_markdown(template_name: &str, turns: &[ChatTurn]) -> String {
+    let mut out = String::new();
+    out.push_str("# ");
+    out.push_str(template_name);
+    out.push_str("\n\n");
+    for turn in turns {
+        let role = match turn.role {
+            ChatRole::User => "## You",
+            ChatRole::Assistant => "## Assistant",
+        };
+        out.push_str(role);
+        out.push_str("\n\n");
+        out.push_str(turn.content.trim_end());
+        out.push_str("\n\n");
+    }
+    out.trim_end().to_string()
 }
 
 fn generate_template_id() -> String {

@@ -38,7 +38,7 @@ src/
 │   │   ├── controller.rs            # TranscriptionController: job state signals, stream event handling
 │   │   ├── panels.rs                # JobStatusPanel, TranscriptResultPanel (copy, timestamps, "Process with AI" navigation)
 │   │   └── utils.rs                 # Formatting helpers (timestamps, durations, filenames)
-│   ├── postprocess.rs               # Standalone Process screen (ProcessScreen): editable text input, template CRUD, note slot assignments, LLM execution, "Save as note"
+│   ├── postprocess.rs               # Standalone Process screen (ProcessScreen): editable text input, template CRUD, note slot assignments, LLM execution as a chat thread with follow-ups, "Save last message" / "Save full thread"
 │   ├── notes/
 │   │   ├── mod.rs
 │   │   ├── screen.rs                # NotesScreen: master-detail layout, source filter
@@ -148,12 +148,16 @@ All state is thread-safe (`Arc<Mutex<T>>`), injected via Tauri's state system:
 2. User selects or creates a template. Prompt placeholders:
    - `{{transcript}}` — replaced with the input textarea content
    - `{{noteN}}` — replaced with the content of the note assigned to that slot
-3. Template rendered with input text + assigned note content
+3. Template rendered with input text + assigned note content → `run_postprocess` IPC
 4. Route based on `postprocess_provider_mode`:
    - **API**: send to remote OpenAI-compatible chat completions endpoint
    - **Local LLM**: ensure llama-server sidecar is running with the selected model, then send to `http://127.0.0.1:<port>/v1/chat/completions`
-5. Streaming response with cancellation support
-6. Result displayed with copy / export / **"Save as note"** (manual — post-processing results no longer auto-save)
+5. Streaming response with cancellation support; backend returns `PostprocessResult { rendered_prompt, response }` — the rendered prompt is retained client-side as the hidden first turn so subsequent follow-ups carry full context
+6. Result rendered as a chat thread starting with the assistant's first reply. The user can:
+   - Iterate with follow-ups via the textarea below the thread (⌘/Ctrl+Enter sends; the frontend appends the user turn optimistically and calls `run_postprocess_follow_up` with the full message history — on error or cancel, the turn is popped and the textarea content restored)
+   - Copy / export the last reply
+   - **"Save as note"** while no follow-ups exist; once at least one follow-up exists, this splits into **"Save last message"** and **"Save full thread"** (the full thread saves as markdown with the template name as H1 and alternating `## You` / `## Assistant` sections)
+7. Cancellation (Local LLM only) uses a single `PostprocessCancelState` token shared by `run_postprocess` and `run_postprocess_follow_up`, so the Cancel button works in both modes
 
 ### Notes
 1. Notes are CRUD-managed via Tauri commands: `list_notes`, `get_note`, `create_note`, `update_note`, `delete_note`

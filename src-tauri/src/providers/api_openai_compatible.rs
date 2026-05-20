@@ -4,7 +4,7 @@ use reqwest::{multipart, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::TranscriptionError;
-use crate::models::{InputType, TranscriptResult, TranscriptionSource};
+use crate::models::{ChatMessage, InputType, TranscriptResult, TranscriptionSource};
 
 pub const PROVIDER_ID: &str = "openai-compatible";
 const SUPPORTED_AUDIO_EXTENSIONS: &[&str] = &["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"];
@@ -234,12 +234,6 @@ struct ChatCompletionsRequest {
     messages: Vec<ChatMessage>,
 }
 
-#[derive(Debug, Serialize)]
-struct ChatMessage {
-    role: String,
-    content: String,
-}
-
 #[derive(Debug, Deserialize)]
 struct ChatCompletionsResponse {
     #[serde(default)]
@@ -262,8 +256,8 @@ pub fn chat_completions_endpoint(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
 }
 
-pub async fn post_process_transcript(
-    rendered_prompt: &str,
+pub async fn post_process_chat(
+    messages: Vec<ChatMessage>,
     model: &str,
     credentials: &ApiCredentials,
 ) -> Result<String, TranscriptionError> {
@@ -278,12 +272,15 @@ pub async fn post_process_transcript(
         ));
     }
 
+    if messages.is_empty() {
+        return Err(TranscriptionError::ApiRequest(
+            "At least one chat message is required.".to_string(),
+        ));
+    }
+
     let request_body = ChatCompletionsRequest {
         model: model.to_string(),
-        messages: vec![ChatMessage {
-            role: "user".to_string(),
-            content: rendered_prompt.to_string(),
-        }],
+        messages,
     };
 
     let response = reqwest::Client::new()
@@ -463,7 +460,7 @@ mod tests {
         extract_api_error_message, infer_audio_mime_type, is_api_supported_audio_file,
         map_chat_completions_error, map_http_error, network_error_message,
         parse_chat_completions_response, parse_json_response, resolve_effective_model_name,
-        transcription_endpoint, ApiCredentials,
+        transcription_endpoint, ApiCredentials, ChatMessage,
     };
 
     #[test]
@@ -904,55 +901,62 @@ mod tests {
         assert!(error.contains("500"));
     }
 
-    // ---- post_process_transcript validation ----
+    // ---- post_process_chat validation ----
+
+    fn sample_messages() -> Vec<ChatMessage> {
+        vec![ChatMessage {
+            role: "user".to_string(),
+            content: "prompt text".to_string(),
+        }]
+    }
 
     #[tokio::test]
-    async fn post_process_transcript_rejects_empty_model() {
-        use super::post_process_transcript;
+    async fn post_process_chat_rejects_empty_model() {
+        use super::post_process_chat;
         let credentials = ApiCredentials {
             api_key: "sk-test".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
         };
-        let error = post_process_transcript("prompt text", "   ", &credentials)
+        let error = post_process_chat(sample_messages(), "   ", &credentials)
             .await
             .expect_err("empty model should fail");
         assert!(error.to_string().contains("model is required"));
     }
 
     #[tokio::test]
-    async fn post_process_transcript_rejects_empty_api_key() {
-        use super::post_process_transcript;
+    async fn post_process_chat_rejects_empty_api_key() {
+        use super::post_process_chat;
         let credentials = ApiCredentials {
             api_key: "   ".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
         };
-        let error = post_process_transcript("prompt text", "gpt-4o-mini", &credentials)
+        let error = post_process_chat(sample_messages(), "gpt-4o-mini", &credentials)
             .await
             .expect_err("empty key should fail");
         assert!(error.to_string().contains("API key"));
     }
 
     #[tokio::test]
-    async fn post_process_transcript_rejects_invalid_base_url() {
-        use super::post_process_transcript;
+    async fn post_process_chat_rejects_invalid_base_url() {
+        use super::post_process_chat;
         let credentials = ApiCredentials {
             api_key: "sk-test".to_string(),
             base_url: "ftp://invalid".to_string(),
         };
-        let error = post_process_transcript("prompt text", "gpt-4o-mini", &credentials)
+        let error = post_process_chat(sample_messages(), "gpt-4o-mini", &credentials)
             .await
             .expect_err("invalid url should fail");
         assert!(error.to_string().contains("http"));
     }
 
     #[tokio::test]
-    async fn post_process_transcript_returns_network_error_for_unreachable_host() {
-        use super::post_process_transcript;
+    async fn post_process_chat_returns_network_error_for_unreachable_host() {
+        use super::post_process_chat;
         let credentials = ApiCredentials {
             api_key: "sk-test".to_string(),
             base_url: "http://127.0.0.1:1".to_string(), // port 1 should be unreachable
         };
-        let error = post_process_transcript("prompt text", "gpt-4o-mini", &credentials)
+        let error = post_process_chat(sample_messages(), "gpt-4o-mini", &credentials)
             .await
             .expect_err("unreachable host should fail");
         let error_str = error.to_string();

@@ -12,11 +12,12 @@ use crate::{
     hotkeys, input_devices, live_recording, llm_engine,
     llm_engine::{LlmServerState, PostprocessCancelState},
     models::{
-        ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, InputType, LiveCaptureProfile,
-        LiveRecordingResult, LiveRecordingStatus, LocalModelDescriptor, ModelDownloadProgress,
-        ModelStatus, Note, NoteSource, NoteSummary, PostProcessTemplate, PostprocessProviderMode,
-        ProviderMode, SaveSettingsRequest, StartFileTranscriptionRequest,
-        TranscribeLiveRecordingRequest, TranscriptResult, TranscriptionStreamEvent,
+        ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, ChatMessage, InputType,
+        LiveCaptureProfile, LiveRecordingResult, LiveRecordingStatus, LocalModelDescriptor,
+        ModelDownloadProgress, ModelStatus, Note, NoteSource, NoteSummary, PostProcessTemplate,
+        PostprocessProviderMode, PostprocessResult, ProviderMode, SaveSettingsRequest,
+        StartFileTranscriptionRequest, TranscribeLiveRecordingRequest, TranscriptResult,
+        TranscriptionStreamEvent,
     },
     notes::NoteStore,
     providers::{
@@ -386,7 +387,7 @@ pub async fn run_postprocess(
     llm_server_state: State<'_, LlmServerState>,
     cancel_state: State<'_, PostprocessCancelState>,
     note_store: State<'_, NoteStore>,
-) -> Result<String, String> {
+) -> Result<PostprocessResult, String> {
     let templates = template_store.load();
     let template = crate::templates::find_template_by_id(&templates, &template_id)
         .ok_or_else(|| format!("Template not found: {template_id}"))?;
@@ -416,6 +417,80 @@ pub async fn run_postprocess(
     let rendered_prompt =
         crate::templates::render_template(&template.prompt, &transcript_text, &note_contents)?;
 
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: rendered_prompt.clone(),
+    }];
+
+    let response = dispatch_postprocess_chat(
+        messages,
+        enable_thinking,
+        &app,
+        &settings_store,
+        &llm_server_state,
+        &cancel_state,
+    )
+    .await?;
+
+    Ok(PostprocessResult {
+        rendered_prompt,
+        response,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn run_postprocess_follow_up(
+    initial_prompt: String,
+    turns: Vec<ChatMessage>,
+    enable_thinking: bool,
+    app: tauri::AppHandle,
+    settings_store: State<'_, SettingsStore>,
+    llm_server_state: State<'_, LlmServerState>,
+    cancel_state: State<'_, PostprocessCancelState>,
+) -> Result<String, String> {
+    if initial_prompt.trim().is_empty() {
+        return Err("Initial prompt is required for follow-up.".to_string());
+    }
+    if turns.is_empty() {
+        return Err("At least one follow-up turn is required.".to_string());
+    }
+    if turns
+        .iter()
+        .any(|m| m.role != "user" && m.role != "assistant")
+    {
+        return Err("Follow-up turns may only use 'user' or 'assistant' roles.".to_string());
+    }
+    if !matches!(turns.last(), Some(msg) if msg.role == "user") {
+        return Err("Follow-up turns must end with a user message.".to_string());
+    }
+
+    let mut messages = Vec::with_capacity(turns.len() + 1);
+    messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: initial_prompt,
+    });
+    messages.extend(turns);
+
+    dispatch_postprocess_chat(
+        messages,
+        enable_thinking,
+        &app,
+        &settings_store,
+        &llm_server_state,
+        &cancel_state,
+    )
+    .await
+}
+
+async fn dispatch_postprocess_chat(
+    messages: Vec<ChatMessage>,
+    enable_thinking: bool,
+    app: &tauri::AppHandle,
+    settings_store: &SettingsStore,
+    llm_server_state: &LlmServerState,
+    cancel_state: &PostprocessCancelState,
+) -> Result<String, String> {
     let settings = settings_store.load().map_err(|e| e.to_string())?;
 
     match settings.postprocess_provider_mode {
@@ -436,8 +511,8 @@ pub async fn run_postprocess(
                 base_url: settings.api_base_url,
             };
 
-            crate::providers::api_openai_compatible::post_process_transcript(
-                &rendered_prompt,
+            crate::providers::api_openai_compatible::post_process_chat(
+                messages,
                 &settings.postprocess_model,
                 &credentials,
             )
@@ -445,15 +520,13 @@ pub async fn run_postprocess(
             .map_err(|e| e.to_string())
         }
         PostprocessProviderMode::LocalLlm => {
-            // 1. Ensure sidecar is running with the configured model
             let port = llm_engine::ensure_server_running(
-                &llm_server_state,
-                &app,
+                llm_server_state,
+                app,
                 &settings.local_llm_model_id,
             )
             .await?;
 
-            // 2. Create cancellation token and publish it so cancel_postprocess can reach it
             let cancel_token = CancellationToken::new();
             {
                 cancel_state
@@ -463,16 +536,14 @@ pub async fn run_postprocess(
                     .replace(cancel_token.clone());
             }
 
-            // 3. Send streaming chat completion to localhost sidecar
-            let result = llm_engine::send_chat_completion(
+            let result = llm_engine::send_chat_completion_messages(
                 port,
-                &rendered_prompt,
+                &messages,
                 cancel_token,
                 enable_thinking,
             )
             .await;
 
-            // 4. Clear token (no-op if cancel_postprocess already took it)
             {
                 cancel_state.token.lock().unwrap().take();
             }

@@ -305,6 +305,18 @@ pub struct PostProcessTemplate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostprocessResult {
+    pub rendered_prompt: String,
+    pub response: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum NoteSource {
     Manual,
@@ -493,7 +505,7 @@ pub async fn run_postprocess(
     template_id: String,
     enable_thinking: bool,
     note_slot_assignments: std::collections::HashMap<String, String>,
-) -> Result<String, String> {
+) -> Result<PostprocessResult, String> {
     invoke_command(
         "run_postprocess",
         RunPostprocessArgs {
@@ -513,6 +525,30 @@ struct RunPostprocessArgs {
     template_id: String,
     enable_thinking: bool,
     note_slot_assignments: std::collections::HashMap<String, String>,
+}
+
+pub async fn run_postprocess_follow_up(
+    initial_prompt: String,
+    turns: Vec<ChatMessage>,
+    enable_thinking: bool,
+) -> Result<String, String> {
+    invoke_command(
+        "run_postprocess_follow_up",
+        RunPostprocessFollowUpArgs {
+            initial_prompt,
+            turns,
+            enable_thinking,
+        },
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunPostprocessFollowUpArgs {
+    initial_prompt: String,
+    turns: Vec<ChatMessage>,
+    enable_thinking: bool,
 }
 
 pub async fn delete_model(model_id: &str) -> Result<(), String> {

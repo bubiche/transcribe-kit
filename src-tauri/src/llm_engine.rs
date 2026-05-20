@@ -9,6 +9,7 @@ use tauri_plugin_shell::ShellExt;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::models::ChatMessage;
 use crate::providers::local_llm;
 
 /// Manages cancellation of an in-flight post-processing request.
@@ -254,19 +255,21 @@ async fn poll_health(port: u16, timeout: Duration) -> Result<(), String> {
 /// between tokens — dropping the connection on cancellation stops generation
 /// promptly. During initial prompt processing (before any tokens stream),
 /// cancellation is not possible; for typical prompt sizes this is sub-second.
-pub async fn send_chat_completion(
+pub async fn send_chat_completion_messages(
     port: u16,
-    prompt: &str,
+    messages: &[ChatMessage],
     cancel_token: CancellationToken,
     enable_thinking: bool,
 ) -> Result<String, String> {
+    if messages.is_empty() {
+        return Err("At least one chat message is required.".to_string());
+    }
+
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{port}/v1/chat/completions");
 
     let body = serde_json::json!({
-        "messages": [
-            { "role": "user", "content": prompt }
-        ],
+        "messages": messages,
         "temperature": 0.3,
         "stream": true,
         // Thinking mode — controlled by the caller. Models that don't

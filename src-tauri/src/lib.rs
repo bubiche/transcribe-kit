@@ -101,6 +101,7 @@ pub fn run() {
             commands::list_templates,
             commands::save_templates,
             commands::run_postprocess,
+            commands::run_postprocess_follow_up,
             commands::list_local_llm_models,
             commands::get_llm_model_status,
             commands::delete_llm_model,
