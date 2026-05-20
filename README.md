@@ -13,7 +13,8 @@ Cross-platform desktop transcription app built with Tauri + Leptos. Transcribe a
 - **Live recording** — push-to-talk or toggle mode with a configurable global hotkey. Works even when the app is in the background.
 - **Meeting capture** — dual-stream mode records microphone and system audio simultaneously, then mixes them into one file for transcription.
 - **Real-time streaming** — transcription segments appear as they're produced, with progress updates.
-- **Post-processing pipeline** — send transcripts through AI prompts. Ships with built-in templates (cleanup, meeting notes, summary) and supports custom user templates. Run post-processing locally with a bundled llama-server sidecar (no API key needed) or via any OpenAI-compatible API.
+- **Standalone Process tab** — apply AI prompt templates to any text (transcripts, notes, or pasted content) — no transcription required first. Ships with built-in templates (cleanup, meeting notes, summary), supports custom user templates with `{{transcript}}` and `{{noteN}}` placeholders, and lets you reference saved notes as additional context. Run locally with a bundled llama-server sidecar (no API key needed) or via any OpenAI-compatible API.
+- **Notes** — persistent local notes. Transcripts auto-save into Notes when transcription completes; processed results save on demand from the Process tab. Notes can be loaded back into Process as input or referenced from templates as `{{noteN}}` slots.
 - **Secure API key storage** — credentials are stored in the system keyring, not in config files.
 - **Persistent settings** — provider, model, device, hotkey, and API config auto-save with debouncing.
 - **Cross-platform** — macOS, Windows, and Linux from one codebase.
@@ -41,6 +42,8 @@ src-tauri/src/
   live_recording/     Audio capture and mixing
   providers/          Backend adapters (Whisper, OpenAI, local LLM)
   settings.rs         Persistent config management
+  templates.rs        Post-processing template storage
+  notes.rs            Notes storage (one JSON file per note)
 ```
 
 ## Local Development

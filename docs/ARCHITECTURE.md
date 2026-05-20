@@ -36,9 +36,14 @@ src/
 │   ├── transcription.rs             # Transcription screen (file picker, provider check, job launch)
 │   ├── transcription/
 │   │   ├── controller.rs            # TranscriptionController: job state signals, stream event handling
-│   │   ├── panels.rs                # JobStatusPanel, TranscriptResultPanel (copy, timestamps)
+│   │   ├── panels.rs                # JobStatusPanel, TranscriptResultPanel (copy, timestamps, "Process with AI" navigation)
 │   │   └── utils.rs                 # Formatting helpers (timestamps, durations, filenames)
-│   ├── postprocess.rs               # Post-processing screen: template CRUD, LLM execution, result display
+│   ├── postprocess.rs               # Standalone Process screen (ProcessScreen): editable text input, template CRUD, note slot assignments, LLM execution, "Save as note"
+│   ├── notes/
+│   │   ├── mod.rs
+│   │   ├── screen.rs                # NotesScreen: master-detail layout, source filter
+│   │   ├── list.rs                  # NoteListPanel: list rendering, source filter chips, date formatting
+│   │   └── editor.rs                # NoteEditorPanel: title/content editing, save/delete
 │   └── settings/
 │       ├── mod.rs
 │       ├── screen.rs                # Settings panel: layout, effects (auto-save, preload)
@@ -78,6 +83,7 @@ src/
 ├── llm_engine.rs                    # llama-server sidecar lifecycle, chat completion, cancellation
 ├── settings.rs                      # JSON config persistence + system keyring for API keys
 ├── templates.rs                     # Post-processing template storage and rendering
+├── notes.rs                         # Notes storage: one JSON file per note, list/get/save/delete
 ├── hotkeys.rs                       # Global shortcut registration, press/release event emission
 ├── input_devices.rs                 # CPAL device enumeration, output loopback detection
 ├── audio_monitor.rs                 # Real-time RMS/peak audio level monitoring thread
@@ -100,6 +106,7 @@ All state is thread-safe (`Arc<Mutex<T>>`), injected via Tauri's state system:
 |-------|---------|
 | `SettingsStore` | Persistent config + keyring access |
 | `TemplateStore` | Post-processing templates |
+| `NoteStore` | Persistent notes (one JSON file per note) |
 | `LocalEngineState` | Cached Whisper model instance |
 | `HotkeyManagerState` | Current hotkey binding and errors |
 | `LiveRecordingManagerState` | Active recording session |
@@ -131,15 +138,31 @@ All state is thread-safe (`Arc<Mutex<T>>`), injected via Tauri's state system:
 4. **Dual stream** (meeting mix): capture mic + system loopback -> mix into single WAV
 5. On stop: hand WAV to transcription pipeline (same local/API routing as file path)
 6. Auto-navigate to transcript on completion
+7. On success, the transcript is also auto-saved as a `Transcription`-source note
 
-### Post-Processing
-1. User selects or creates a template (prompt with `{{transcript}}` placeholder)
-2. Template rendered with transcript text
-3. Route based on `postprocess_provider_mode`:
+### Post-Processing (standalone Process tab)
+1. User opens the Process tab directly (no prior transcription required). Input can be:
+   - Typed/pasted into the editable input textarea
+   - Loaded from a saved note via "Load from note"
+   - Pre-filled by clicking "Process with AI" on a transcript result (sets the `pending_process_text` signal and switches `active_screen` to `Process`)
+2. User selects or creates a template. Prompt placeholders:
+   - `{{transcript}}` — replaced with the input textarea content
+   - `{{noteN}}` — replaced with the content of the note assigned to that slot
+3. Template rendered with input text + assigned note content
+4. Route based on `postprocess_provider_mode`:
    - **API**: send to remote OpenAI-compatible chat completions endpoint
    - **Local LLM**: ensure llama-server sidecar is running with the selected model, then send to `http://127.0.0.1:<port>/v1/chat/completions`
-4. Streaming response with cancellation support
-5. Result displayed with copy support
+5. Streaming response with cancellation support
+6. Result displayed with copy / export / **"Save as note"** (manual — post-processing results no longer auto-save)
+
+### Notes
+1. Notes are CRUD-managed via Tauri commands: `list_notes`, `get_note`, `create_note`, `update_note`, `delete_note`
+2. Storage: one JSON file per note at `~/.config/transcribe-kit/notes/<id>.json`. `list_notes` returns lightweight `NoteSummary` (no content) for fast list rendering; `get_note(id)` returns the full `Note`
+3. `NoteSource` distinguishes how a note was created:
+   - `Manual` — created from the Notes tab
+   - `Transcription` — auto-saved when a transcription completes
+   - `PostProcessing` — manually saved from the Process tab result
+4. Notes are read from the Process tab in two ways: as full-content input (via "Load from note") and as named template slots (via `{{noteN}}` placeholders)
 
 ## Audio Pipeline
 
@@ -229,4 +252,5 @@ cargo make test     # fmt-check + clippy + unit tests
 - **Settings**: `~/.config/transcribe-kit/settings.json`
 - **API keys**: system keyring (`dev.transcribekit.desktop` service)
 - **Templates**: `~/.config/transcribe-kit/templates.json`
+- **Notes**: `~/.config/transcribe-kit/notes/<id>.json` (one file per note)
 - **Models**: `~/.cache/transcribe-kit/models/`
