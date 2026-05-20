@@ -147,6 +147,22 @@ impl NoteStore {
         }
         Ok(())
     }
+
+    pub fn delete_all(&self) -> Result<(), SettingsError> {
+        if !self.notes_dir.is_dir() {
+            return Ok(());
+        }
+
+        let entries = fs::read_dir(&self.notes_dir).map_err(SettingsError::WriteFile)?;
+        for entry in entries {
+            let entry = entry.map_err(SettingsError::WriteFile)?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                fs::remove_file(&path).map_err(SettingsError::WriteFile)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -258,6 +274,45 @@ mod tests {
 
         store.delete("note-del").expect("delete");
         assert!(store.get("note-del").is_none());
+    }
+
+    #[test]
+    fn delete_all_removes_all_notes() {
+        let (_temp_dir, store) = temp_store();
+        store
+            .save(&sample_note("note-1", "A", "2026-01-01T00:00:00Z"))
+            .expect("save");
+        store
+            .save(&sample_note("note-2", "B", "2026-01-02T00:00:00Z"))
+            .expect("save");
+        store
+            .save(&sample_note("note-3", "C", "2026-01-03T00:00:00Z"))
+            .expect("save");
+
+        store.delete_all().expect("delete_all");
+        assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn delete_all_is_idempotent_when_dir_missing() {
+        let (_temp_dir, store) = temp_store();
+        assert!(!store.notes_dir.exists());
+        store.delete_all().expect("delete_all should succeed");
+    }
+
+    #[test]
+    fn delete_all_preserves_non_json_files() {
+        let (_temp_dir, store) = temp_store();
+        store
+            .save(&sample_note("note-1", "A", "2026-01-01T00:00:00Z"))
+            .expect("save");
+
+        let stray = store.notes_dir.join("README.txt");
+        fs::write(&stray, "do not delete").expect("write stray");
+
+        store.delete_all().expect("delete_all");
+        assert!(store.list().is_empty());
+        assert!(stray.exists(), "non-json files should be preserved");
     }
 
     #[test]

@@ -162,6 +162,15 @@ pub async fn stop_server_for_model(state: &LlmServerState, model_id: &str) {
     }
 }
 
+/// Kill the running server regardless of which model it serves.
+pub async fn stop_server(state: &LlmServerState) {
+    let mut guard = state.inner.lock().await;
+    if let Some(server) = guard.take() {
+        let _ = server.child.kill();
+        clear_sidecar_pid();
+    }
+}
+
 /// Preload the llama-server sidecar at app startup if the user has
 /// post-processing set to LocalLlm and the model is already downloaded.
 /// Runs in a background tokio task so it doesn't block the UI.

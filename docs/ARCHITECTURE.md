@@ -76,7 +76,7 @@ src/
 ├── main.rs                          # Binary entry point
 ├── lib.rs                           # App init: state setup, plugin registration, command registration
 ├── models.rs                        # Shared data types (AppSettings, TranscriptResult, descriptors, etc.)
-├── commands.rs                      # IPC command handlers (~20 commands exposed to frontend)
+├── commands.rs                      # IPC command handlers exposed to the frontend
 ├── engine.rs                        # LocalEngineState: Whisper model cache (load once, reuse)
 ├── transcription.rs                 # Orchestration: route to local or API, decode audio, stream results
 ├── audio.rs                         # Multi-codec decoding (Symphonia + Opus fallback), MP3 encoding

@@ -3,11 +3,11 @@ use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
 
 use crate::tauri_api::{
-    delete_llm_model, delete_model, ensure_llm_model_downloaded, ensure_model_downloaded,
-    get_settings, list_api_models, list_input_devices, list_local_llm_models, list_local_models,
-    preload_local_model, save_settings, ApiModelDescriptor, AppSettings,
-    AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile, LocalModelDescriptor,
-    PostprocessProviderMode, ProviderMode, SaveSettingsRequest,
+    delete_app_data, delete_llm_model, delete_model, ensure_llm_model_downloaded,
+    ensure_model_downloaded, get_settings, list_api_models, list_input_devices,
+    list_local_llm_models, list_local_models, preload_local_model, save_settings,
+    ApiModelDescriptor, AppSettings, AudioInputDeviceDescriptor, HotkeyMode, LiveCaptureProfile,
+    LocalModelDescriptor, PostprocessProviderMode, ProviderMode, SaveSettingsRequest,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -169,6 +169,9 @@ pub struct SettingsFeatureState {
     pub auto_save_status: RwSignal<AutoSaveStatus>,
     pub auto_save_error: RwSignal<Option<String>>,
     pub api_key_save_requested: RwSignal<u64>,
+    pub is_deleting_app_data: RwSignal<bool>,
+    pub delete_app_data_error: RwSignal<Option<String>>,
+    pub delete_app_data_succeeded: RwSignal<bool>,
 }
 
 impl SettingsFeatureState {
@@ -192,6 +195,9 @@ impl SettingsFeatureState {
             auto_save_status: RwSignal::new(AutoSaveStatus::Idle),
             auto_save_error: RwSignal::new(None),
             api_key_save_requested: RwSignal::new(0),
+            is_deleting_app_data: RwSignal::new(false),
+            delete_app_data_error: RwSignal::new(None),
+            delete_app_data_succeeded: RwSignal::new(false),
         }
     }
 
@@ -456,6 +462,48 @@ impl SettingsFeatureState {
                     self.llm_download.download_error.set(Some(error));
                 }
             }
+        });
+    }
+
+    pub fn delete_app_data(self) {
+        if self.is_deleting_app_data.get_untracked() {
+            return;
+        }
+
+        self.is_deleting_app_data.set(true);
+        self.delete_app_data_error.set(None);
+        self.delete_app_data_succeeded.set(false);
+
+        spawn_local(async move {
+            let result = delete_app_data().await;
+
+            // Refresh model lists regardless of result so the UI reflects the
+            // post-delete state. Ignore errors here — the surfaced error from
+            // the delete call is more meaningful.
+            if let Ok(models) = list_local_models().await {
+                self.local_models.set(models);
+            }
+            if let Ok(models) = list_local_llm_models().await {
+                self.llm_models.set(models);
+            }
+
+            // Forget any cached warming state — the previously warmed model is
+            // no longer on disk, so its sidecar/engine is gone too.
+            self.warmed_model_id.set(None);
+            self.warming_model_id.set(None);
+            self.download.reset();
+            self.llm_download.reset();
+
+            match result {
+                Ok(()) => {
+                    self.delete_app_data_succeeded.set(true);
+                }
+                Err(error) => {
+                    self.delete_app_data_error.set(Some(error));
+                }
+            }
+
+            self.is_deleting_app_data.set(false);
         });
     }
 

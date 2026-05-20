@@ -32,12 +32,6 @@ use crate::{
     },
 };
 
-const LOCAL_MODEL_IDS: &[&str] = &[
-    "whisper-tiny",
-    "whisper-base",
-    "whisper-small",
-    "whisper-large-v3-turbo",
-];
 const API_MODEL_IDS: &[&str] = &["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "custom"];
 
 #[tauri::command]
@@ -47,7 +41,7 @@ pub fn health_check() -> String {
 
 #[tauri::command]
 pub fn list_local_models() -> Vec<LocalModelDescriptor> {
-    LOCAL_MODEL_IDS
+    local_whisper::LOCAL_MODEL_IDS
         .iter()
         .map(|id| {
             let downloaded = local_whisper::expected_model_path(id)
@@ -195,7 +189,12 @@ pub fn save_settings(
     };
 
     let prepared = store
-        .prepare_save(request, LOCAL_MODEL_IDS, API_MODEL_IDS, &input_device_ids)
+        .prepare_save(
+            request,
+            local_whisper::LOCAL_MODEL_IDS,
+            API_MODEL_IDS,
+            &input_device_ids,
+        )
         .map_err(|error| error.to_string())?;
 
     hotkey_state
@@ -614,6 +613,38 @@ pub fn update_note(
 #[tauri::command]
 pub fn delete_note(id: String, store: State<'_, NoteStore>) -> Result<(), String> {
     store.delete(&id).map_err(|e| e.to_string())
+}
+
+/// Delete user-managed app data: all notes, all downloaded Whisper models,
+/// and all downloaded LLM models. Stops the LLM sidecar and unloads the
+/// in-memory Whisper engine first so file deletion is not blocked
+/// (Windows memory-maps the GGUF) and stale weights are not served.
+#[tauri::command]
+pub async fn delete_app_data(
+    engine_state: State<'_, LocalEngineState>,
+    llm_server_state: State<'_, LlmServerState>,
+    note_store: State<'_, NoteStore>,
+) -> Result<(), String> {
+    llm_engine::stop_server(&llm_server_state).await;
+    engine_state.unload();
+
+    let mut errors: Vec<String> = Vec::new();
+
+    if let Err(error) = note_store.delete_all() {
+        errors.push(format!("notes: {error}"));
+    }
+    if let Err(error) = local_whisper::delete_all_models() {
+        errors.push(format!("Whisper models: {error}"));
+    }
+    if let Err(error) = local_llm::delete_all_models() {
+        errors.push(format!("LLM models: {error}"));
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join(" | "))
+    }
 }
 
 fn load_api_credentials(

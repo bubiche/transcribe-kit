@@ -114,7 +114,8 @@ pub fn run() {
             commands::get_note,
             commands::create_note,
             commands::update_note,
-            commands::delete_note
+            commands::delete_note,
+            commands::delete_app_data
         ])
         .setup(move |app| {
             // Kill any orphaned llama-server from a previous crash before anything else

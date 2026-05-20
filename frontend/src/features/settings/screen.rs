@@ -6,7 +6,7 @@ use crate::live_recording::LiveRecordingController;
 use crate::tauri_api::{HotkeyMode, ProviderMode};
 
 use super::components::{
-    ApiConnectionCard, AutoSaveIndicator, CaptureProfileField, HotkeySettingsCard,
+    ApiConnectionCard, AutoSaveIndicator, CaptureProfileField, DangerZoneCard, HotkeySettingsCard,
     InputDeviceField, PostprocessSettingsCard, ProviderSettingsCard,
 };
 use super::state::{AutoSaveStatus, SettingsFeatureState};
@@ -151,6 +151,7 @@ pub fn SettingsScreen(
                         />
                         <ApiConnectionCard state=state />
                         <PostprocessSettingsCard state=state />
+                        <DangerZoneCard state=state />
                     </div>
                     <div class="settings-sidebar">
                         <HotkeySettingsCard state=state />

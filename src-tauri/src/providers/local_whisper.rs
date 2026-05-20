@@ -16,6 +16,13 @@ use crate::models::{
 
 pub const ENGINE_ID: &str = "whisper";
 
+pub const LOCAL_MODEL_IDS: &[&str] = &[
+    "whisper-tiny",
+    "whisper-base",
+    "whisper-small",
+    "whisper-large-v3-turbo",
+];
+
 #[derive(Clone)]
 pub struct WhisperEngine {
     context: Arc<WhisperContext>,
@@ -226,6 +233,13 @@ pub fn delete_model(model_id: &str) -> Result<(), TranscriptionError> {
         std::fs::remove_file(&path).map_err(|e| {
             TranscriptionError::ModelLoad(format!("Failed to delete model file: {e}"))
         })?;
+    }
+    Ok(())
+}
+
+pub fn delete_all_models() -> Result<(), TranscriptionError> {
+    for model_id in LOCAL_MODEL_IDS {
+        delete_model(model_id)?;
     }
     Ok(())
 }

@@ -1024,6 +1024,92 @@ pub(super) fn PostprocessSettingsCard(state: SettingsFeatureState) -> impl IntoV
 }
 
 #[component]
+pub(super) fn DangerZoneCard(state: SettingsFeatureState) -> impl IntoView {
+    let confirm_open = RwSignal::new(false);
+
+    let on_request = move |_| {
+        confirm_open.set(true);
+        state.delete_app_data_error.set(None);
+        state.delete_app_data_succeeded.set(false);
+    };
+
+    let on_cancel = move |_| {
+        confirm_open.set(false);
+    };
+
+    let on_confirm = move |_| {
+        confirm_open.set(false);
+        state.delete_app_data();
+    };
+
+    view! {
+        <section class="section settings-card danger-zone-card">
+            <p class="tag tag-danger">"Danger zone"</p>
+            <h3>"Delete app data"</h3>
+            <p class="body-copy">
+                "Permanently remove all saved notes and every downloaded transcription and post-processing model. Settings and your API key are kept. This cannot be undone."
+            </p>
+
+            <Show
+                when=move || confirm_open.get()
+                fallback=move || {
+                    view! {
+                        <button
+                            type="button"
+                            class="danger-button"
+                            on:click=on_request
+                            disabled=move || state.is_deleting_app_data.get()
+                        >
+                            {move || {
+                                if state.is_deleting_app_data.get() {
+                                    "Deleting...".to_string()
+                                } else {
+                                    "Delete app data".to_string()
+                                }
+                            }}
+                        </button>
+                    }
+                }
+            >
+                <div class="danger-confirm">
+                    <p class="field-hint field-warning">
+                        "Delete all notes and downloaded models? This cannot be undone."
+                    </p>
+                    <div class="danger-confirm-actions">
+                        <button
+                            type="button"
+                            class="danger-button"
+                            on:click=on_confirm
+                        >
+                            "Confirm delete"
+                        </button>
+                        <button
+                            type="button"
+                            class="secondary-button"
+                            on:click=on_cancel
+                        >
+                            "Cancel"
+                        </button>
+                    </div>
+                </div>
+            </Show>
+
+            <Show when=move || state.delete_app_data_succeeded.get() && !state.is_deleting_app_data.get()>
+                <p class="field-hint field-success">
+                    "All notes and downloaded models were deleted."
+                </p>
+            </Show>
+
+            <Show when=move || state.delete_app_data_error.get().is_some()>
+                <p class="field-hint field-warning">
+                    {move || state.delete_app_data_error.get().unwrap_or_default()}
+                </p>
+            </Show>
+        </section>
+    }
+}
+
+#[component]
 pub(super) fn ApiConnectionCard(state: SettingsFeatureState) -> impl IntoView {
     view! {
         <section class="section settings-card">

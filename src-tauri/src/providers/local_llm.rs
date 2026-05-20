@@ -145,6 +145,13 @@ pub fn delete_model(model_id: &str) -> Result<(), TranscriptionError> {
     Ok(())
 }
 
+pub fn delete_all_models() -> Result<(), TranscriptionError> {
+    for model_id in LLM_MODEL_IDS {
+        delete_model(model_id)?;
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Download
 // ---------------------------------------------------------------------------

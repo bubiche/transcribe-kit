@@ -621,6 +621,10 @@ pub async fn delete_note(id: &str) -> Result<(), String> {
     invoke_command("delete_note", NoteIdArg { id: id.to_string() }).await
 }
 
+pub async fn delete_app_data() -> Result<(), String> {
+    invoke_command("delete_app_data", ()).await
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NoteIdArg {

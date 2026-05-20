@@ -15,6 +15,11 @@ impl LocalEngineState {
             inner: Arc::new(Mutex::new(None)),
         }
     }
+
+    pub fn unload(&self) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
 }
 
 pub(crate) fn get_or_load_engine(
