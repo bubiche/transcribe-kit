@@ -228,14 +228,6 @@ body {
   display: contents;
 }
 
-.postprocess-inline {
-  display: none;
-}
-
-.postprocess-inline-visible {
-  display: contents;
-}
-
 .settings-overlay {
   display: none;
   position: fixed;
@@ -423,6 +415,17 @@ body {
 .primary-button:disabled {
   opacity: 0.65;
   cursor: progress;
+}
+
+.primary-button.success {
+  background: linear-gradient(135deg, #145a37, #1f7a4a);
+  box-shadow: 0 12px 24px rgba(20, 90, 55, 0.3);
+}
+
+.primary-button.error {
+  color: white;
+  background: linear-gradient(135deg, #a1493b, #c45a48);
+  box-shadow: 0 12px 24px rgba(161, 75, 59, 0.25);
 }
 
 .secondary-button {

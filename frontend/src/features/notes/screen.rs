@@ -19,6 +19,7 @@ pub fn NotesScreen(active: Signal<bool>) -> impl IntoView {
     let source_filter = RwSignal::new(None::<NoteSource>);
     let refresh_nonce = RwSignal::new(0_u64);
     let is_new_note = RwSignal::new(false);
+    let save_feedback = RwSignal::new(None::<&'static str>);
 
     // Resizable list panel
     let grid_ref = NodeRef::<Div>::new();
@@ -94,16 +95,24 @@ pub fn NotesScreen(active: Signal<bool>) -> impl IntoView {
         is_new_note.set(true);
         selected_note_id.set(None);
         selected_note.set(None);
+        save_feedback.set(None);
     };
 
     let on_select = move |id: String| {
         is_new_note.set(false);
         selected_note_id.set(Some(id));
+        save_feedback.set(None);
     };
 
     let on_save = move |(title, content): (String, String)| {
         let new = is_new_note.get_untracked();
         let current_id = selected_note_id.get_untracked();
+
+        if !new && current_id.is_none() {
+            return;
+        }
+
+        save_feedback.set(Some("Saving..."));
 
         spawn_local(async move {
             let result = if new {
@@ -111,13 +120,20 @@ pub fn NotesScreen(active: Signal<bool>) -> impl IntoView {
             } else if let Some(id) = current_id {
                 update_note(id, title, content).await
             } else {
+                save_feedback.set(None);
                 return;
             };
 
-            if let Ok(saved) = result {
-                is_new_note.set(false);
-                selected_note_id.set(Some(saved.id));
-                refresh_nonce.update(|n| *n = n.saturating_add(1));
+            match result {
+                Ok(saved) => {
+                    is_new_note.set(false);
+                    selected_note_id.set(Some(saved.id));
+                    refresh_nonce.update(|n| *n = n.saturating_add(1));
+                    save_feedback.set(Some("Saved"));
+                }
+                Err(_) => {
+                    save_feedback.set(Some("Save failed"));
+                }
             }
         });
     };
@@ -162,6 +178,7 @@ pub fn NotesScreen(active: Signal<bool>) -> impl IntoView {
                 <NoteEditorPanel
                     note=selected_note
                     is_new=is_new_note
+                    save_feedback=save_feedback
                     on_save=on_save
                     on_delete=on_delete
                 />

@@ -15,12 +15,12 @@ use crate::tauri_api::{
 pub use self::controller::TranscriptionController;
 pub use self::panels::{JobStatusPanel, TranscriptResultPanel};
 use self::utils::file_name_from_path;
-pub use self::utils::format_timestamp;
 
 #[component]
 pub fn TranscribeScreen(
     active: Signal<bool>,
-    show_postprocess: RwSignal<bool>,
+    pending_process_text: RwSignal<Option<String>>,
+    active_screen: RwSignal<crate::app::ActiveScreen>,
     transcription: TranscriptionController,
     live_recording: LiveRecordingController,
     live_recording_state: Signal<LiveRecordingState>,
@@ -338,7 +338,8 @@ pub fn TranscribeScreen(
                     <TranscriptResultPanel
                         active=active
                         controller=transcription
-                        show_postprocess=show_postprocess
+                        pending_process_text=pending_process_text
+                        active_screen=active_screen
                         live_recording_state=live_recording_state
                         live_recording_label=live_recording_label
                         live_recording_elapsed_ms=live_recording_elapsed_ms

@@ -6,6 +6,7 @@ use crate::tauri_api::Note;
 pub fn NoteEditorPanel(
     note: RwSignal<Option<Note>>,
     is_new: RwSignal<bool>,
+    save_feedback: RwSignal<Option<&'static str>>,
     on_save: impl Fn((String, String)) + Copy + Send + Sync + 'static,
     on_delete: impl Fn(String) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
@@ -21,6 +22,25 @@ pub fn NoteEditorPanel(
             editing_title.set(String::new());
             editing_content.set(String::new());
         }
+    });
+
+    let is_saving = Signal::derive(move || save_feedback.get() == Some("Saving..."));
+
+    let save_button_label = Signal::derive(move || match save_feedback.get() {
+        Some(label) => label,
+        None => {
+            if is_new.get() {
+                "Create note"
+            } else {
+                "Save"
+            }
+        }
+    });
+
+    let save_button_class = Signal::derive(move || match save_feedback.get() {
+        Some("Saved") => "primary-button success",
+        Some("Save failed") => "primary-button error",
+        _ => "primary-button",
     });
 
     let handle_save = move |_| {
@@ -67,11 +87,11 @@ pub fn NoteEditorPanel(
                         "Delete"
                     </button>
                     <button
-                        class="primary-button"
+                        class=move || save_button_class.get()
                         on:click=handle_save
-                        disabled=move || editing_title.get().trim().is_empty()
+                        disabled=move || editing_title.get().trim().is_empty() || is_saving.get()
                     >
-                        {move || if is_new.get() { "Create note" } else { "Save" }}
+                        {move || save_button_label.get()}
                     </button>
                 </div>
             </Show>

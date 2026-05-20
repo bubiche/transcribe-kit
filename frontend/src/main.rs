@@ -1,4 +1,4 @@
-mod app;
+pub mod app;
 mod features;
 mod live_recording;
 mod tauri_api;

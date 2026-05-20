@@ -6,7 +6,7 @@ use wasm_bindgen::JsValue;
 
 use crate::features::{
     notes::NotesScreen,
-    postprocess::PostProcessScreen,
+    postprocess::ProcessScreen,
     settings::SettingsScreen,
     transcription::{TranscribeScreen, TranscriptionController},
 };
@@ -19,15 +19,16 @@ use crate::tauri_api::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActiveScreen {
+pub enum ActiveScreen {
     Transcribe,
     Notes,
+    Process,
 }
 
 #[component]
 pub fn App() -> impl IntoView {
     let show_settings = RwSignal::new(false);
-    let show_postprocess = RwSignal::new(false);
+    let pending_process_text = RwSignal::new(None::<String>);
     let hotkey_activity = RwSignal::new(None::<HotkeyActivityEvent>);
     let activity_nonce = RwSignal::new(0_u64);
     let recording_elapsed_tick = RwSignal::new(0_u64);
@@ -125,31 +126,34 @@ pub fn App() -> impl IntoView {
         <main class="shell">
             <HotkeyActivityBanner activity=hotkey_activity />
             <LiveRecordingBanner controller=live_recording elapsed_tick=recording_elapsed_tick />
-            <AppHeader active_screen=active_screen show_settings=show_settings show_postprocess=show_postprocess />
+            <AppHeader active_screen=active_screen show_settings=show_settings />
             <div class="frame">
                 // Transcribe tab — always mounted, CSS-toggled
                 <div class="tab-content" class:tab-content-active=move || active_screen.get() == ActiveScreen::Transcribe>
                     <TranscribeScreen
                         active=Signal::derive(move || active_screen.get() == ActiveScreen::Transcribe && !show_settings.get())
-                        show_postprocess=show_postprocess
+                        pending_process_text=pending_process_text
+                        active_screen=active_screen
                         transcription=transcription
                         live_recording=live_recording
                         live_recording_state=live_recording_state
                         live_recording_label=live_recording_label
                         live_recording_elapsed_ms=live_recording_elapsed_ms
                     />
-                    <div class="postprocess-inline" class:postprocess-inline-visible=move || show_postprocess.get()>
-                        <PostProcessScreen
-                            active=Signal::derive(move || show_postprocess.get() && active_screen.get() == ActiveScreen::Transcribe)
-                            transcription=transcription
-                        />
-                    </div>
                 </div>
 
                 // Notes tab — always mounted, CSS-toggled
                 <div class="tab-content" class:tab-content-active=move || active_screen.get() == ActiveScreen::Notes>
                     <NotesScreen
                         active=Signal::derive(move || active_screen.get() == ActiveScreen::Notes && !show_settings.get())
+                    />
+                </div>
+
+                // Process tab — always mounted, CSS-toggled
+                <div class="tab-content" class:tab-content-active=move || active_screen.get() == ActiveScreen::Process>
+                    <ProcessScreen
+                        active=Signal::derive(move || active_screen.get() == ActiveScreen::Process && !show_settings.get())
+                        pending_process_text=pending_process_text
                     />
                 </div>
             </div>
@@ -335,7 +339,6 @@ mod tests {
 fn AppHeader(
     active_screen: RwSignal<ActiveScreen>,
     show_settings: RwSignal<bool>,
-    show_postprocess: RwSignal<bool>,
 ) -> impl IntoView {
     view! {
         <header class="app-header">
@@ -351,12 +354,16 @@ fn AppHeader(
                 <button
                     class="app-header-tab"
                     class:app-header-tab-active=move || active_screen.get() == ActiveScreen::Notes
-                    on:click=move |_| {
-                        show_postprocess.set(false);
-                        active_screen.set(ActiveScreen::Notes);
-                    }
+                    on:click=move |_| active_screen.set(ActiveScreen::Notes)
                 >
                     "Notes"
+                </button>
+                <button
+                    class="app-header-tab"
+                    class:app-header-tab-active=move || active_screen.get() == ActiveScreen::Process
+                    on:click=move |_| active_screen.set(ActiveScreen::Process)
+                >
+                    "Process"
                 </button>
             </nav>
             <button

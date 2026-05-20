@@ -79,7 +79,8 @@ pub fn JobStatusPanel(
 pub fn TranscriptResultPanel(
     active: Signal<bool>,
     controller: TranscriptionController,
-    show_postprocess: RwSignal<bool>,
+    pending_process_text: RwSignal<Option<String>>,
+    active_screen: RwSignal<crate::app::ActiveScreen>,
     live_recording_state: Signal<LiveRecordingState>,
     live_recording_label: Signal<String>,
     live_recording_elapsed_ms: Signal<u64>,
@@ -392,9 +393,13 @@ pub fn TranscriptResultPanel(
                     <Show when=move || show_postprocess_button.get()>
                         <button
                             class="secondary-button postprocess-nav-button"
-                            on:click=move |_| show_postprocess.update(|v| *v = !*v)
+                            on:click=move |_| {
+                                let text = plain_copy_text.get_untracked();
+                                pending_process_text.set(Some(text));
+                                active_screen.set(crate::app::ActiveScreen::Process);
+                            }
                         >
-                            {move || if show_postprocess.get() { "Hide post-process" } else { "Post-process" }}
+                            "Process with AI"
                         </button>
                     </Show>
                 </div>
